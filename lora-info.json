@@ -1,0 +1,6 @@
+{
+  "lora_url": "https://v3b.fal.media/files/b/0a9fbd41/2AUv5rp2ieGuN1NpjN1Tb_pytorch_lora_weights.safetensors",
+  "trigger_word": "redshadow_adam",
+  "trained_at": "2026-06-25T17:25:34.423Z",
+  "config_url": "https://v3b.fal.media/files/b/0a9fbd41/YDHs7nfjQyxLOc3DerqWv_config.json"
+}
