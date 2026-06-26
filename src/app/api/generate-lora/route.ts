@@ -53,22 +53,27 @@ export async function POST(request: NextRequest) {
       fullPrompt = `${TRIGGER_WORD}, ${fullPrompt}`;
     }
 
+    const falInput = {
+      prompt: fullPrompt,
+      loras: [
+        {
+          path: LORA_URL,
+          scale: body.lora_scale ?? 1.0,
+        },
+      ],
+      num_images: body.num_images ?? 1,
+      image_size: body.image_size ?? "square",
+      guidance_scale: body.guidance_scale ?? 3.5,
+      num_inference_steps: body.num_inference_steps ?? 28,
+      output_format: "png",
+      enable_safety_checker: false,
+    };
+
+    // Debug: log the exact payload being sent to fal
+    console.log("[generate-lora] Sending to fal-ai/flux-lora:", JSON.stringify(falInput, null, 2));
+
     const result = (await fal.subscribe("fal-ai/flux-lora", {
-      input: {
-        prompt: fullPrompt,
-        loras: [
-          {
-            path: LORA_URL,
-            scale: body.lora_scale ?? 1.0,
-          },
-        ],
-        num_images: body.num_images ?? 1,
-        image_size: body.image_size ?? "square",
-        guidance_scale: body.guidance_scale ?? 3.5,
-        num_inference_steps: body.num_inference_steps ?? 28,
-        output_format: "png",
-        enable_safety_checker: false,
-      },
+      input: falInput,
       logs: true,
       onQueueUpdate: (update) => {
         if (update.status === "IN_PROGRESS" && update.logs) {
