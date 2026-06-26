@@ -11,11 +11,13 @@ const LORA_URL =
   "https://v3b.fal.media/files/b/0a9fbd41/2AUv5rp2ieGuN1NpjN1Tb_pytorch_lora_weights.safetensors";
 const TRIGGER_WORD = "redshadow_adam";
 
+type ImageSizePreset = "square_hd" | "square" | "portrait_4_3" | "portrait_16_9" | "landscape_4_3" | "landscape_16_9";
+
 interface GenerateLoraRequest {
   prompt: string;
   lora_scale?: number;
   num_images?: number;
-  image_size?: string;
+  image_size?: ImageSizePreset;
   guidance_scale?: number;
   num_inference_steps?: number;
 }
