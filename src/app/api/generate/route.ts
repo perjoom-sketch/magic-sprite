@@ -10,8 +10,7 @@ interface GenerateRequest {
   image_url?: string;
   image_base64?: string;
   prompt: string;
-  model?: "kontext" | "ultra" | "banana";
-  image_prompt_strength?: number;
+  model?: "banana2" | "banana-pro";
 }
 
 interface FalImage {
@@ -49,7 +48,6 @@ export async function POST(request: NextRequest) {
     // Use image_url if provided, otherwise convert base64 to data URL
     let imageUrl = body.image_url;
     if (!imageUrl && body.image_base64) {
-      // fal.ai accepts data URLs
       imageUrl = body.image_base64.startsWith("data:")
         ? body.image_base64
         : `data:image/png;base64,${body.image_base64}`;
@@ -57,37 +55,28 @@ export async function POST(request: NextRequest) {
 
     // Select model based on request
     let modelId: string;
-    let input: Record<string, unknown>;
 
     switch (body.model) {
-      case "ultra":
-        modelId = "fal-ai/flux-pro/v1.1-ultra";
-        input = {
-          prompt: body.prompt,
-          image_url: imageUrl,
-          image_prompt_strength: body.image_prompt_strength ?? 0.5,
-          num_images: 1,
-          aspect_ratio: "1:1",
-        };
+      case "banana2":
+        // Nano Banana 2 - $0.08/image (draft/iteration)
+        modelId = "fal-ai/nano-banana-2/edit";
         break;
-      case "banana":
+      case "banana-pro":
+      default:
+        // Nano Banana Pro - $0.15/image (final/quality)
         modelId = "fal-ai/nano-banana-pro/edit";
-        input = {
-          prompt: body.prompt,
-          image_urls: [imageUrl],
-          num_images: 1,
-          output_format: "png",
-        };
         break;
-      default: // kontext
-        modelId = "fal-ai/flux-kontext";
-        input = {
-          image_url: imageUrl,
-          prompt: body.prompt,
-          num_images: 1,
-          output_format: "png",
-        };
     }
+
+    const input = {
+      prompt: body.prompt,
+      image_urls: [imageUrl],
+      num_images: 1,
+      aspect_ratio: "1:1",
+      output_format: "png",
+    };
+
+    console.log(`[generate] Using model: ${modelId}`);
 
     const result = (await fal.subscribe(modelId, {
       input,
@@ -103,6 +92,7 @@ export async function POST(request: NextRequest) {
       success: true,
       images: result.data.images,
       prompt: result.data.prompt,
+      model: modelId,
     });
   } catch (error) {
     console.error("Generation error:", error);

@@ -3,7 +3,7 @@
 import { useState, useRef } from "react";
 import Image from "next/image";
 
-type ModelType = "kontext" | "ultra" | "banana" | "lora";
+type ModelType = "banana2" | "banana-pro";
 
 export default function Home() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -11,9 +11,7 @@ export default function Home() {
   const [resultImage, setResultImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [model, setModel] = useState<ModelType>("banana");
-  const [strength, setStrength] = useState(0.5);
-  const [loraScale, setLoraScale] = useState(1.0);
+  const [model, setModel] = useState<ModelType>("banana-pro");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -28,13 +26,8 @@ export default function Home() {
   };
 
   const handleGenerate = async () => {
-    // LoRA mode doesn't require image
-    if (model !== "lora" && (!imagePreview || !prompt)) {
+    if (!imagePreview || !prompt) {
       setError("이미지와 프롬프트를 모두 입력해주세요.");
-      return;
-    }
-    if (model === "lora" && !prompt) {
-      setError("프롬프트를 입력해주세요.");
       return;
     }
 
@@ -43,31 +36,15 @@ export default function Home() {
     setResultImage(null);
 
     try {
-      let response;
-
-      if (model === "lora") {
-        // Use LoRA generation endpoint
-        response = await fetch("/api/generate-lora", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            prompt,
-            lora_scale: loraScale,
-          }),
-        });
-      } else {
-        // Use existing generate endpoint
-        response = await fetch("/api/generate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            image_base64: imagePreview,
-            prompt,
-            model,
-            image_prompt_strength: strength,
-          }),
-        });
-      }
+      const response = await fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image_base64: imagePreview,
+          prompt,
+          model,
+        }),
+      });
 
       const data = await response.json();
 
@@ -95,38 +72,36 @@ export default function Home() {
         <div className="grid md:grid-cols-2 gap-8">
           {/* Input Section */}
           <div className="space-y-6">
-            {model !== "lora" && (
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  레퍼런스 이미지
-                </label>
-                <div
-                  className="border-2 border-dashed border-zinc-600 rounded-lg p-4 text-center cursor-pointer hover:border-zinc-400 transition-colors"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  {imagePreview ? (
-                    <Image
-                      src={imagePreview}
-                      alt="Preview"
-                      width={300}
-                      height={300}
-                      className="mx-auto max-h-64 object-contain"
-                    />
-                  ) : (
-                    <div className="py-8 text-zinc-400">
-                      클릭하여 이미지 업로드
-                    </div>
-                  )}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleFileChange}
-                    className="hidden"
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                레퍼런스 이미지
+              </label>
+              <div
+                className="border-2 border-dashed border-zinc-600 rounded-lg p-4 text-center cursor-pointer hover:border-zinc-400 transition-colors"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {imagePreview ? (
+                  <Image
+                    src={imagePreview}
+                    alt="Preview"
+                    width={300}
+                    height={300}
+                    className="mx-auto max-h-64 object-contain"
                   />
-                </div>
+                ) : (
+                  <div className="py-8 text-zinc-400">
+                    클릭하여 이미지 업로드
+                  </div>
+                )}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
               </div>
-            )}
+            </div>
 
             <div>
               <label className="block text-sm font-medium mb-2">프롬프트</label>
@@ -140,102 +115,43 @@ export default function Home() {
 
             <div>
               <label className="block text-sm font-medium mb-2">모델</label>
-              <div className="flex flex-wrap gap-4">
-                <label className="flex items-center gap-2 cursor-pointer">
+              <div className="flex flex-col gap-3">
+                <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border border-zinc-700 hover:border-zinc-500 transition-colors">
                   <input
                     type="radio"
                     name="model"
-                    value="lora"
-                    checked={model === "lora"}
-                    onChange={() => setModel("lora")}
+                    value="banana2"
+                    checked={model === "banana2"}
+                    onChange={() => setModel("banana2")}
                     className="w-4 h-4"
                   />
-                  <span>LoRA (redshadow_adam)</span>
+                  <div>
+                    <span className="font-medium">Nano Banana 2</span>
+                    <span className="text-zinc-400 text-sm ml-2">$0.08/장</span>
+                    <p className="text-xs text-zinc-500">빠른 시안/이터레이션용</p>
+                  </div>
                 </label>
-                <label className="flex items-center gap-2 cursor-pointer">
+                <label className="flex items-center gap-3 cursor-pointer p-3 rounded-lg border border-zinc-700 hover:border-zinc-500 transition-colors">
                   <input
                     type="radio"
                     name="model"
-                    value="banana"
-                    checked={model === "banana"}
-                    onChange={() => setModel("banana")}
+                    value="banana-pro"
+                    checked={model === "banana-pro"}
+                    onChange={() => setModel("banana-pro")}
                     className="w-4 h-4"
                   />
-                  <span>Banana Pro (편집)</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="model"
-                    value="kontext"
-                    checked={model === "kontext"}
-                    onChange={() => setModel("kontext")}
-                    className="w-4 h-4"
-                  />
-                  <span>Kontext (편집)</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="model"
-                    value="ultra"
-                    checked={model === "ultra"}
-                    onChange={() => setModel("ultra")}
-                    className="w-4 h-4"
-                  />
-                  <span>Ultra (생성)</span>
+                  <div>
+                    <span className="font-medium">Nano Banana Pro</span>
+                    <span className="text-zinc-400 text-sm ml-2">$0.15/장</span>
+                    <p className="text-xs text-zinc-500">최종 확정/고품질용</p>
+                  </div>
                 </label>
               </div>
             </div>
 
-            {model === "ultra" && (
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  레퍼런스 강도: {strength.toFixed(2)}
-                </label>
-                <input
-                  type="range"
-                  min="0.1"
-                  max="1"
-                  step="0.05"
-                  value={strength}
-                  onChange={(e) => setStrength(parseFloat(e.target.value))}
-                  className="w-full"
-                />
-                <div className="flex justify-between text-xs text-zinc-500 mt-1">
-                  <span>자유 생성</span>
-                  <span>원본 유지</span>
-                </div>
-              </div>
-            )}
-
-            {model === "lora" && (
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  LoRA 강도: {loraScale.toFixed(2)}
-                </label>
-                <input
-                  type="range"
-                  min="0.1"
-                  max="2"
-                  step="0.1"
-                  value={loraScale}
-                  onChange={(e) => setLoraScale(parseFloat(e.target.value))}
-                  className="w-full"
-                />
-                <div className="flex justify-between text-xs text-zinc-500 mt-1">
-                  <span>약하게</span>
-                  <span>강하게</span>
-                </div>
-                <p className="text-xs text-zinc-500 mt-2">
-                  trigger: redshadow_adam (자동 추가됨)
-                </p>
-              </div>
-            )}
-
             <button
               onClick={handleGenerate}
-              disabled={loading || !prompt || (model !== "lora" && !imagePreview)}
+              disabled={loading || !prompt || !imagePreview}
               className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-zinc-700 disabled:cursor-not-allowed rounded-lg font-medium transition-colors"
             >
               {loading ? "생성 중..." : "생성하기"}
