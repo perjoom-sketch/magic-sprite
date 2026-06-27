@@ -6,11 +6,16 @@ fal.config({
   credentials: process.env.FAL_KEY,
 });
 
+type AspectRatio = "auto" | "21:9" | "16:9" | "3:2" | "4:3" | "5:4" | "1:1" | "4:5" | "3:4" | "2:3" | "9:16" | "4:1" | "1:4" | "8:1" | "1:8";
+type Resolution = "0.5K" | "1K" | "2K" | "4K";
+
 interface GenerateRequest {
   image_url?: string;
   image_base64?: string;
   prompt: string;
   model?: "banana2" | "banana-pro";
+  aspect_ratio?: AspectRatio;
+  resolution?: Resolution;
 }
 
 interface FalImage {
@@ -68,15 +73,21 @@ export async function POST(request: NextRequest) {
         break;
     }
 
+    // Use provided aspect_ratio or default to "auto"
+    const aspectRatio = body.aspect_ratio || "auto";
+    // Use provided resolution or default to "1K"
+    const resolution = body.resolution || "1K";
+
     const input = {
       prompt: body.prompt,
       image_urls: [imageUrl],
       num_images: 1,
-      aspect_ratio: "1:1",
+      aspect_ratio: aspectRatio,
+      resolution: resolution,
       output_format: "png",
     };
 
-    console.log(`[generate] Using model: ${modelId}`);
+    console.log(`[generate] Using model: ${modelId}, aspect_ratio: ${aspectRatio}, resolution: ${resolution}`);
 
     const result = (await fal.subscribe(modelId, {
       input,

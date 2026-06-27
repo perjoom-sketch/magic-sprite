@@ -1,9 +1,55 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 import Image from "next/image";
 
 type ModelType = "banana2" | "banana-pro";
+type AspectRatio = "auto" | "21:9" | "16:9" | "3:2" | "4:3" | "5:4" | "1:1" | "4:5" | "3:4" | "2:3" | "9:16" | "4:1" | "1:4" | "8:1" | "1:8";
+type Resolution = "0.5K" | "1K" | "2K" | "4K";
+
+// Aspect ratio enum values as numeric ratios for comparison
+const ASPECT_RATIOS: { value: AspectRatio; label: string; ratio: number }[] = [
+  { value: "auto", label: "자동(레퍼런스)", ratio: 0 },
+  { value: "2:3", label: "2:3", ratio: 2 / 3 },
+  { value: "3:4", label: "3:4", ratio: 3 / 4 },
+  { value: "4:5", label: "4:5", ratio: 4 / 5 },
+  { value: "9:16", label: "9:16", ratio: 9 / 16 },
+  { value: "1:1", label: "1:1", ratio: 1 },
+  { value: "5:4", label: "5:4", ratio: 5 / 4 },
+  { value: "4:3", label: "4:3", ratio: 4 / 3 },
+  { value: "3:2", label: "3:2", ratio: 3 / 2 },
+  { value: "16:9", label: "16:9", ratio: 16 / 9 },
+  { value: "21:9", label: "21:9", ratio: 21 / 9 },
+  { value: "4:1", label: "4:1", ratio: 4 / 1 },
+  { value: "1:4", label: "1:4", ratio: 1 / 4 },
+  { value: "8:1", label: "8:1", ratio: 8 / 1 },
+  { value: "1:8", label: "1:8", ratio: 1 / 8 },
+];
+
+const RESOLUTIONS: { value: Resolution; label: string }[] = [
+  { value: "0.5K", label: "0.5K" },
+  { value: "1K", label: "1K" },
+  { value: "2K", label: "2K" },
+  { value: "4K", label: "4K" },
+];
+
+// Find closest aspect ratio enum for given width/height
+function findClosestAspectRatio(width: number, height: number): AspectRatio {
+  const inputRatio = width / height;
+  let closest: AspectRatio = "1:1";
+  let minDiff = Infinity;
+
+  for (const ar of ASPECT_RATIOS) {
+    if (ar.value === "auto") continue;
+    const diff = Math.abs(inputRatio - ar.ratio);
+    if (diff < minDiff) {
+      minDiff = diff;
+      closest = ar.value;
+    }
+  }
+
+  return closest;
+}
 
 export default function Home() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -12,6 +58,10 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<ModelType>("banana-pro");
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>("auto");
+  const [resolution, setResolution] = useState<Resolution>("1K");
+  const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
+  const [detectedRatio, setDetectedRatio] = useState<AspectRatio | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -20,7 +70,20 @@ export default function Home() {
 
     const reader = new FileReader();
     reader.onload = (event) => {
-      setImagePreview(event.target?.result as string);
+      const dataUrl = event.target?.result as string;
+      setImagePreview(dataUrl);
+
+      // Read image dimensions to detect aspect ratio
+      const img = new window.Image();
+      img.onload = () => {
+        const width = img.naturalWidth;
+        const height = img.naturalHeight;
+        setImageDimensions({ width, height });
+        const detected = findClosestAspectRatio(width, height);
+        setDetectedRatio(detected);
+        console.log(`[page] Image loaded: ${width}x${height}, detected ratio: ${detected}`);
+      };
+      img.src = dataUrl;
     };
     reader.readAsDataURL(file);
   };
@@ -36,6 +99,13 @@ export default function Home() {
     setResultImage(null);
 
     try {
+      // Determine final aspect ratio: if "auto", use detected ratio from image
+      const finalAspectRatio = aspectRatio === "auto" && detectedRatio
+        ? detectedRatio
+        : aspectRatio;
+
+      console.log(`[page] Generating with aspect_ratio: ${finalAspectRatio}, resolution: ${resolution}`);
+
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -43,6 +113,8 @@ export default function Home() {
           image_base64: imagePreview,
           prompt,
           model,
+          aspect_ratio: finalAspectRatio,
+          resolution,
         }),
       });
 
@@ -146,6 +218,45 @@ export default function Home() {
                     <p className="text-xs text-zinc-500">최종 확정/고품질용</p>
                   </div>
                 </label>
+              </div>
+            </div>
+
+            {/* Aspect Ratio & Resolution Dropdowns */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  종횡비
+                  {imageDimensions && detectedRatio && aspectRatio === "auto" && (
+                    <span className="text-zinc-400 text-xs ml-2">
+                      ({imageDimensions.width}×{imageDimensions.height} → {detectedRatio})
+                    </span>
+                  )}
+                </label>
+                <select
+                  value={aspectRatio}
+                  onChange={(e) => setAspectRatio(e.target.value as AspectRatio)}
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg focus:outline-none focus:border-blue-500"
+                >
+                  {ASPECT_RATIOS.map((ar) => (
+                    <option key={ar.value} value={ar.value}>
+                      {ar.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-2">해상도</label>
+                <select
+                  value={resolution}
+                  onChange={(e) => setResolution(e.target.value as Resolution)}
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg focus:outline-none focus:border-blue-500"
+                >
+                  {RESOLUTIONS.map((res) => (
+                    <option key={res.value} value={res.value}>
+                      {res.label}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
