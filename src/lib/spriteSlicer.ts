@@ -319,3 +319,254 @@ export function autoDetectGrid(imageData: ImageData): { columns: number; rows: n
   const rows = detectRows(copy);
   return { columns, rows };
 }
+
+// ─── Magic Wand (Connected Components) ────────────────────────────────
+
+export interface MagicWandOptions {
+  chromaKey: ChromaKeyOptions;
+  alignMode: AlignMode;
+  padding: number;
+  /** 캐릭터로 인정할 최소 픽셀 수 (기본 2000) */
+  minBlobSize: number;
+}
+
+interface Blob {
+  label: number;
+  pixels: { x: number; y: number }[];
+  centerX: number;
+}
+
+/**
+ * 8방향 연결 요소(Connected Components) 라벨링.
+ * BFS 기반 flood-fill로 불투명 픽셀 덩어리를 분리.
+ */
+export function connectedComponents(
+  imageData: ImageData,
+  alphaThreshold = 20
+): { labeled: Int32Array; numLabels: number; sizes: number[] } {
+  const { width, height, data } = imageData;
+  const labeled = new Int32Array(width * height);
+  let currentLabel = 0;
+  const sizes: number[] = [];
+
+  // 8방향 오프셋
+  const dx = [-1, 0, 1, -1, 1, -1, 0, 1];
+  const dy = [-1, -1, -1, 0, 0, 1, 1, 1];
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      const alpha = data[idx * 4 + 3];
+
+      // 이미 라벨링 됐거나 투명이면 스킵
+      if (labeled[idx] !== 0 || alpha <= alphaThreshold) continue;
+
+      // 새 덩어리 발견 — BFS
+      currentLabel++;
+      let size = 0;
+      const queue: number[] = [idx];
+      labeled[idx] = currentLabel;
+
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        size++;
+        const cx = cur % width;
+        const cy = Math.floor(cur / width);
+
+        for (let d = 0; d < 8; d++) {
+          const nx = cx + dx[d];
+          const ny = cy + dy[d];
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+          const nidx = ny * width + nx;
+          if (labeled[nidx] !== 0) continue;
+          if (data[nidx * 4 + 3] <= alphaThreshold) continue;
+          labeled[nidx] = currentLabel;
+          queue.push(nidx);
+        }
+      }
+
+      sizes.push(size);
+    }
+  }
+
+  return { labeled, numLabels: currentLabel, sizes };
+}
+
+/**
+ * 작은 조각(blob)을 가장 가까운 큰 덩어리에 병합.
+ * x중심 거리 기준.
+ */
+export function mergeSmallBlobs(
+  labeled: Int32Array,
+  width: number,
+  height: number,
+  sizes: number[],
+  minBlobSize: number
+): { merged: Int32Array; blobs: Blob[] } {
+  // 각 라벨의 픽셀 좌표 수집 & x중심 계산
+  const labelData: Map<number, { pixels: { x: number; y: number }[]; sumX: number }> = new Map();
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const lbl = labeled[y * width + x];
+      if (lbl === 0) continue;
+      if (!labelData.has(lbl)) {
+        labelData.set(lbl, { pixels: [], sumX: 0 });
+      }
+      const d = labelData.get(lbl)!;
+      d.pixels.push({ x, y });
+      d.sumX += x;
+    }
+  }
+
+  // 큰 덩어리(캐릭터) 식별
+  const bigLabels: { label: number; centerX: number }[] = [];
+  const smallLabels: { label: number; centerX: number }[] = [];
+
+  for (const [lbl, d] of labelData) {
+    const centerX = d.sumX / d.pixels.length;
+    if (sizes[lbl - 1] >= minBlobSize) {
+      bigLabels.push({ label: lbl, centerX });
+    } else {
+      smallLabels.push({ label: lbl, centerX });
+    }
+  }
+
+  // 큰 덩어리를 x좌표 기준 정렬
+  bigLabels.sort((a, b) => a.centerX - b.centerX);
+
+  // 작은 조각을 가장 가까운 큰 덩어리에 병합
+  const labelMapping: Map<number, number> = new Map();
+  for (const big of bigLabels) {
+    labelMapping.set(big.label, big.label);
+  }
+  for (const small of smallLabels) {
+    if (bigLabels.length === 0) {
+      // 큰 덩어리가 없으면 그냥 유지
+      labelMapping.set(small.label, small.label);
+    } else {
+      // 가장 가까운 큰 덩어리 찾기
+      let nearest = bigLabels[0];
+      let minDist = Math.abs(small.centerX - nearest.centerX);
+      for (const big of bigLabels) {
+        const dist = Math.abs(small.centerX - big.centerX);
+        if (dist < minDist) {
+          minDist = dist;
+          nearest = big;
+        }
+      }
+      labelMapping.set(small.label, nearest.label);
+    }
+  }
+
+  // 병합된 라벨 배열 생성
+  const merged = new Int32Array(width * height);
+  for (let i = 0; i < labeled.length; i++) {
+    const lbl = labeled[i];
+    if (lbl === 0) continue;
+    merged[i] = labelMapping.get(lbl) || lbl;
+  }
+
+  // 최종 blob 목록 (큰 덩어리 기준, x순 정렬)
+  const blobs: Blob[] = bigLabels.map(b => ({
+    label: b.label,
+    pixels: [],
+    centerX: b.centerX,
+  }));
+
+  // 병합된 픽셀 수집
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const lbl = merged[y * width + x];
+      if (lbl === 0) continue;
+      const blob = blobs.find(b => b.label === lbl);
+      if (blob) blob.pixels.push({ x, y });
+    }
+  }
+
+  return { merged, blobs };
+}
+
+/**
+ * 요술봉 모드 파이프라인: 크로마키 → 윤곽 분리 → 조각 병합 → 정렬.
+ */
+export function sliceSpriteByContour(
+  imageData: ImageData,
+  options: MagicWandOptions
+): SliceResult {
+  const { width, height } = imageData;
+
+  // 1. 크로마키 적용
+  applyChromaKey(imageData, options.chromaKey);
+
+  // 2. Connected Components
+  const { labeled, sizes } = connectedComponents(imageData);
+
+  // 3. 작은 조각 병합
+  const { blobs } = mergeSmallBlobs(labeled, width, height, sizes, options.minBlobSize);
+
+  if (blobs.length === 0) {
+    return { frames: [], canvasWidth: 0, canvasHeight: 0 };
+  }
+
+  // 4. 각 blob을 독립 ImageData로 추출
+  const cells: ImageData[] = [];
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d")!;
+  ctx.putImageData(imageData, 0, 0);
+
+  for (const blob of blobs) {
+    // blob의 바운딩 박스 계산
+    let left = width, top = height, right = 0, bottom = 0;
+    for (const p of blob.pixels) {
+      if (p.x < left) left = p.x;
+      if (p.x > right) right = p.x;
+      if (p.y < top) top = p.y;
+      if (p.y > bottom) bottom = p.y;
+    }
+    right++;
+    bottom++;
+
+    const cellW = right - left;
+    const cellH = bottom - top;
+
+    // 이 blob의 픽셀만 포함하는 ImageData 생성
+    const cellCanvas = document.createElement("canvas");
+    cellCanvas.width = cellW;
+    cellCanvas.height = cellH;
+    const cellCtx = cellCanvas.getContext("2d")!;
+    const cellData = cellCtx.createImageData(cellW, cellH);
+
+    // blob 픽셀 좌표를 빠른 조회용 Set에 저장
+    const pixelSet = new Set<string>();
+    for (const p of blob.pixels) {
+      pixelSet.add(`${p.x},${p.y}`);
+    }
+
+    // 원본에서 해당 영역 복사 (blob 픽셀만)
+    for (let y = top; y < bottom; y++) {
+      for (let x = left; x < right; x++) {
+        const srcIdx = (y * width + x) * 4;
+        const dstIdx = ((y - top) * cellW + (x - left)) * 4;
+
+        if (pixelSet.has(`${x},${y}`)) {
+          cellData.data[dstIdx] = imageData.data[srcIdx];
+          cellData.data[dstIdx + 1] = imageData.data[srcIdx + 1];
+          cellData.data[dstIdx + 2] = imageData.data[srcIdx + 2];
+          cellData.data[dstIdx + 3] = imageData.data[srcIdx + 3];
+        } else {
+          // blob에 속하지 않는 픽셀은 투명
+          cellData.data[dstIdx + 3] = 0;
+        }
+      }
+    }
+
+    cells.push(cellData);
+  }
+
+  // 5. 기존 alignFrames로 정렬 + 크기 통일
+  return alignFrames(cells, options.alignMode, options.padding);
+}
