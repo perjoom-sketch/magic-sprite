@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback } from "react";
 import Image from "next/image";
 import SpriteSlicer from "@/components/SpriteSlicer";
+import VideoUpload from "@/components/VideoUpload";
 
 type ModelType = "banana2" | "banana-pro";
 type AspectRatio = "auto" | "21:9" | "16:9" | "3:2" | "4:3" | "5:4" | "1:1" | "4:5" | "3:4" | "2:3" | "9:16" | "4:1" | "1:4" | "8:1" | "1:8";
@@ -52,7 +53,13 @@ function findClosestAspectRatio(width: number, height: number): AspectRatio {
   return closest;
 }
 
+type InputTab = "image" | "video" | "video-gen";
+
 export default function Home() {
+  // 입력 탭
+  const [activeTab, setActiveTab] = useState<InputTab>("image");
+
+  // 이미지 생성 관련
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [resultImage, setResultImage] = useState<string | null>(null);
@@ -64,6 +71,9 @@ export default function Home() {
   const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
   const [detectedRatio, setDetectedRatio] = useState<AspectRatio | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 영상 업로드 관련
+  const [videoFrames, setVideoFrames] = useState<ImageData[] | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -136,6 +146,11 @@ export default function Home() {
     }
   };
 
+  // 영상 프레임 추출 완료 핸들러
+  const handleVideoFramesExtracted = (frames: ImageData[]) => {
+    setVideoFrames(frames);
+  };
+
   return (
     <div className="min-h-screen bg-zinc-900 text-white p-8">
       <div className="max-w-4xl mx-auto">
@@ -143,9 +158,44 @@ export default function Home() {
           Magic Sprite Generator
         </h1>
 
-        <div className="grid md:grid-cols-2 gap-8">
-          {/* Input Section */}
-          <div className="space-y-6">
+        {/* 입력 탭 */}
+        <div className="mb-6">
+          <div className="flex border-b border-zinc-700">
+            <button
+              onClick={() => setActiveTab("image")}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === "image"
+                  ? "border-blue-500 text-blue-400"
+                  : "border-transparent text-zinc-400 hover:text-white"
+              }`}
+            >
+              이미지 생성
+            </button>
+            <button
+              onClick={() => setActiveTab("video")}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === "video"
+                  ? "border-blue-500 text-blue-400"
+                  : "border-transparent text-zinc-400 hover:text-white"
+              }`}
+            >
+              영상 업로드
+            </button>
+            <button
+              disabled
+              className="px-4 py-2 text-sm font-medium border-b-2 border-transparent text-zinc-600 cursor-not-allowed"
+              title="준비 중 (BYOK)"
+            >
+              영상 직접생성
+            </button>
+          </div>
+        </div>
+
+        {/* 탭 1: 이미지 생성 */}
+        {activeTab === "image" && (
+          <div className="grid md:grid-cols-2 gap-8">
+            {/* Input Section */}
+            <div className="space-y-6">
             <div>
               <label className="block text-sm font-medium mb-2">
                 레퍼런스 이미지
@@ -308,12 +358,27 @@ export default function Home() {
                 </div>
               )}
             </div>
+            </div>
           </div>
-        </div>
+        )}
+
+        {/* 탭 2: 영상 업로드 */}
+        {activeTab === "video" && (
+          <div className="border border-zinc-700 rounded-lg p-6">
+            <h2 className="text-xl font-bold mb-4">영상에서 프레임 추출</h2>
+            <p className="text-sm text-zinc-400 mb-4">
+              Hailuo, Runway 등에서 생성한 mp4 영상을 업로드하여 스프라이트 프레임을 추출합니다.
+            </p>
+            <VideoUpload onFramesExtracted={handleVideoFramesExtracted} />
+          </div>
+        )}
 
         {/* Sprite Slicer Section */}
         <div className="md:col-span-2">
-          <SpriteSlicer source={resultImage} />
+          <SpriteSlicer
+            source={activeTab === "image" ? resultImage : null}
+            cells={activeTab === "video" ? videoFrames : null}
+          />
         </div>
       </div>
     </div>

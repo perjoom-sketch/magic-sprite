@@ -23,6 +23,8 @@ import JSZip from "jszip";
 interface SpriteSlicerProps {
   /** 생성 결과 이미지 URL (fal.media 등 외부) */
   source?: string | null;
+  /** 영상에서 추출된 프레임 (직접 주입) - 셀 분리 건너뛰고 alignFramesWithSpec으로 */
+  cells?: ImageData[] | null;
 }
 
 const CHROMA_PRESETS: { label: string; color: [number, number, number] }[] = [
@@ -41,7 +43,7 @@ const ASPECT_PRESETS: { label: string; w: number; h: number }[] = [
 
 type SliceMode = "grid" | "magicWand";
 
-export default function SpriteSlicer({ source }: SpriteSlicerProps) {
+export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSlicerProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [sliceMode, setSliceMode] = useState<SliceMode>("grid");
   const [columns, setColumns] = useState(6);
@@ -76,6 +78,47 @@ export default function SpriteSlicer({ source }: SpriteSlicerProps) {
   useEffect(() => {
     if (source) setImageUrl(source);
   }, [source]);
+
+  // injectedCells가 있으면 바로 처리 (영상 프레임 직접 주입)
+  useEffect(() => {
+    if (!injectedCells || injectedCells.length === 0) return;
+
+    setProcessing(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      // 출력 규격 적용하여 프레임 생성
+      const outputSpec: OutputSpec = {
+        sizeMode,
+        width: fixedWidth,
+        height: fixedHeight,
+        aspectW,
+        aspectH,
+        longSide,
+        fitMode,
+        fillRatio,
+        alignMode,
+        pixelArt,
+      };
+
+      const sliceResult = alignFramesWithSpec(injectedCells, outputSpec);
+
+      if (sliceResult.frames.length === 0) {
+        setError("프레임을 처리할 수 없습니다.");
+      } else {
+        setResult(sliceResult);
+        // 영상 프레임은 출력 규격 자동 활성화
+        if (!useOutputSpec) {
+          setUseOutputSpec(true);
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "처리 중 오류 발생");
+    } finally {
+      setProcessing(false);
+    }
+  }, [injectedCells, sizeMode, fixedWidth, fixedHeight, aspectW, aspectH, longSide, fitMode, fillRatio, alignMode, pixelArt]);
 
   // 애니메이션 루프
   useEffect(() => {
