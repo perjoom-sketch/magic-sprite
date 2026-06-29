@@ -3,8 +3,10 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
   sliceSprite,
+  sliceSpriteByContour,
   autoDetectGrid,
   type SliceOptions,
+  type MagicWandOptions,
   type AlignMode,
   type SliceResult,
 } from "@/lib/spriteSlicer";
@@ -21,10 +23,14 @@ const CHROMA_PRESETS: { label: string; color: [number, number, number] }[] = [
   { label: "흰색", color: [255, 255, 255] },
 ];
 
+type SliceMode = "grid" | "magicWand";
+
 export default function SpriteSlicer({ source }: SpriteSlicerProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [sliceMode, setSliceMode] = useState<SliceMode>("grid");
   const [columns, setColumns] = useState(6);
   const [rows, setRows] = useState(1);
+  const [minBlobSize, setMinBlobSize] = useState(2000);
   const [chromaColor, setChromaColor] = useState<[number, number, number]>([0, 255, 0]);
   const [tolerance, setTolerance] = useState(40);
   const [alignMode, setAlignMode] = useState<AlignMode>("bottom");
@@ -112,18 +118,34 @@ export default function SpriteSlicer({ source }: SpriteSlicerProps) {
       return;
     }
 
-    const options: SliceOptions = {
-      columns,
-      rows,
-      chromaKey: { targetColor: chromaColor, tolerance },
-      alignMode,
-      padding,
-    };
-
     try {
-      const sliceResult = sliceSprite(data, options);
+      let sliceResult: SliceResult;
+
+      if (sliceMode === "magicWand") {
+        const options: MagicWandOptions = {
+          chromaKey: { targetColor: chromaColor, tolerance },
+          alignMode,
+          padding,
+          minBlobSize,
+        };
+        sliceResult = sliceSpriteByContour(data, options);
+      } else {
+        const options: SliceOptions = {
+          columns,
+          rows,
+          chromaKey: { targetColor: chromaColor, tolerance },
+          alignMode,
+          padding,
+        };
+        sliceResult = sliceSprite(data, options);
+      }
+
       if (sliceResult.frames.length === 0) {
-        setError("프레임을 찾을 수 없습니다. 크로마키 설정을 확인해주세요.");
+        if (sliceMode === "magicWand") {
+          setError("캐릭터 덩어리를 찾을 수 없습니다. 최소 덩어리 크기를 낮추거나 크로마키 설정을 확인해주세요.");
+        } else {
+          setError("프레임을 찾을 수 없습니다. 크로마키 설정을 확인해주세요.");
+        }
       } else {
         setResult(sliceResult);
       }
@@ -207,30 +229,87 @@ export default function SpriteSlicer({ source }: SpriteSlicerProps) {
         </div>
       </div>
 
+      {/* 모드 선택 */}
+      <div className="mb-4">
+        <label className="block text-xs text-zinc-400 mb-2">분할 모드</label>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setSliceMode("grid")}
+            className={`px-3 py-1.5 text-sm rounded ${
+              sliceMode === "grid"
+                ? "bg-blue-600 text-white"
+                : "bg-zinc-700 hover:bg-zinc-600"
+            }`}
+          >
+            사각 분할
+          </button>
+          <button
+            onClick={() => setSliceMode("magicWand")}
+            className={`px-3 py-1.5 text-sm rounded ${
+              sliceMode === "magicWand"
+                ? "bg-blue-600 text-white"
+                : "bg-zinc-700 hover:bg-zinc-600"
+            }`}
+          >
+            요술봉 (윤곽 분리)
+          </button>
+        </div>
+        {sliceMode === "magicWand" && (
+          <p className="text-xs text-zinc-500 mt-1">
+            캐릭터를 덩어리로 자동 분리합니다. 여백이 좁아 옆 캐릭터가 끼어드는 문제를 해결합니다.
+          </p>
+        )}
+      </div>
+
       {/* 설정 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-        <div>
-          <label className="block text-xs text-zinc-400 mb-1">열(Columns)</label>
-          <input
-            type="number"
-            min={1}
-            max={20}
-            value={columns}
-            onChange={(e) => setColumns(Number(e.target.value))}
-            className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-zinc-400 mb-1">행(Rows)</label>
-          <input
-            type="number"
-            min={1}
-            max={10}
-            value={rows}
-            onChange={(e) => setRows(Number(e.target.value))}
-            className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
-          />
-        </div>
+        {/* 사각 분할 모드 전용: 열/행 */}
+        {sliceMode === "grid" && (
+          <>
+            <div>
+              <label className="block text-xs text-zinc-400 mb-1">열(Columns)</label>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={columns}
+                onChange={(e) => setColumns(Number(e.target.value))}
+                className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-zinc-400 mb-1">행(Rows)</label>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={rows}
+                onChange={(e) => setRows(Number(e.target.value))}
+                className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm"
+              />
+            </div>
+          </>
+        )}
+
+        {/* 요술봉 모드 전용: 최소 덩어리 크기 */}
+        {sliceMode === "magicWand" && (
+          <div className="col-span-2">
+            <label className="block text-xs text-zinc-400 mb-1">
+              최소 덩어리 크기 (px)
+            </label>
+            <input
+              type="range"
+              min={500}
+              max={10000}
+              step={100}
+              value={minBlobSize}
+              onChange={(e) => setMinBlobSize(Number(e.target.value))}
+              className="w-full"
+            />
+            <span className="text-xs text-zinc-500">{minBlobSize}px (작은 조각은 가까운 캐릭터에 병합)</span>
+          </div>
+        )}
+
         <div>
           <label className="block text-xs text-zinc-400 mb-1">여백(px)</label>
           <input
@@ -292,14 +371,16 @@ export default function SpriteSlicer({ source }: SpriteSlicerProps) {
           </select>
         </div>
 
-        {/* 자동 감지 */}
-        <button
-          onClick={handleAutoDetect}
-          disabled={!imageUrl}
-          className="px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 rounded"
-        >
-          자동 감지
-        </button>
+        {/* 자동 감지 (사각 분할 모드에서만) */}
+        {sliceMode === "grid" && (
+          <button
+            onClick={handleAutoDetect}
+            disabled={!imageUrl}
+            className="px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 rounded"
+          >
+            자동 감지
+          </button>
+        )}
 
         {/* 실행 */}
         <button
