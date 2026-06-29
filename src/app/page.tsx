@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback } from "react";
 import Image from "next/image";
+import SpriteSlicer from "@/components/SpriteSlicer";
 
 type ModelType = "banana2" | "banana-pro";
 type AspectRatio = "auto" | "21:9" | "16:9" | "3:2" | "4:3" | "5:4" | "1:1" | "4:5" | "3:4" | "2:3" | "9:16" | "4:1" | "1:4" | "8:1" | "1:8";
@@ -100,6 +101,7 @@ export default function Home() {
 
     try {
       // Determine final aspect ratio: if "auto", use detected ratio from image
+      console.log(`[page] aspectRatio state: ${aspectRatio}, detectedRatio state: ${detectedRatio}`);
       const finalAspectRatio = aspectRatio === "auto" && detectedRatio
         ? detectedRatio
         : aspectRatio;
@@ -307,6 +309,11 @@ export default function Home() {
               )}
             </div>
           </div>
+        </div>
+
+        {/* Sprite Slicer Section */}
+        <div className="md:col-span-2">
+          <SpriteSlicer source={resultImage} />
         </div>
       </div>
     </div>
