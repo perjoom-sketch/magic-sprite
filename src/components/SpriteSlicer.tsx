@@ -5,8 +5,16 @@ import {
   sliceSprite,
   sliceSpriteByContour,
   autoDetectGrid,
+  alignFramesWithSpec,
+  splitGrid,
+  applyChromaKey,
+  connectedComponents,
+  mergeSmallBlobs,
   type SliceOptions,
   type MagicWandOptions,
+  type OutputSpec,
+  type SizeMode,
+  type FitMode,
   type AlignMode,
   type SliceResult,
 } from "@/lib/spriteSlicer";
@@ -21,6 +29,14 @@ const CHROMA_PRESETS: { label: string; color: [number, number, number] }[] = [
   { label: "녹색", color: [0, 255, 0] },
   { label: "검정", color: [0, 0, 0] },
   { label: "흰색", color: [255, 255, 255] },
+];
+
+const ASPECT_PRESETS: { label: string; w: number; h: number }[] = [
+  { label: "1:1", w: 1, h: 1 },
+  { label: "4:3", w: 4, h: 3 },
+  { label: "3:4", w: 3, h: 4 },
+  { label: "16:9", w: 16, h: 9 },
+  { label: "2:3", w: 2, h: 3 },
 ];
 
 type SliceMode = "grid" | "magicWand";
@@ -43,6 +59,18 @@ export default function SpriteSlicer({ source }: SpriteSlicerProps) {
   const [animFrame, setAnimFrame] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const animRef = useRef<number | null>(null);
+
+  // 출력 규격 설정
+  const [useOutputSpec, setUseOutputSpec] = useState(false);
+  const [sizeMode, setSizeMode] = useState<SizeMode>("auto");
+  const [fixedWidth, setFixedWidth] = useState(256);
+  const [fixedHeight, setFixedHeight] = useState(256);
+  const [aspectW, setAspectW] = useState(1);
+  const [aspectH, setAspectH] = useState(1);
+  const [longSide, setLongSide] = useState(256);
+  const [fitMode, setFitMode] = useState<FitMode>("contain");
+  const [fillRatio, setFillRatio] = useState(0.8);
+  const [pixelArt, setPixelArt] = useState(true);
 
   // source가 바뀌면 자동 적용
   useEffect(() => {
@@ -121,23 +149,99 @@ export default function SpriteSlicer({ source }: SpriteSlicerProps) {
     try {
       let sliceResult: SliceResult;
 
-      if (sliceMode === "magicWand") {
-        const options: MagicWandOptions = {
-          chromaKey: { targetColor: chromaColor, tolerance },
+      if (useOutputSpec) {
+        // 출력 규격 사용 시: 셀 추출 → alignFramesWithSpec
+        const chromaKeyOpts = { targetColor: chromaColor, tolerance };
+        applyChromaKey(data, chromaKeyOpts);
+
+        let cells: ImageData[];
+
+        if (sliceMode === "magicWand") {
+          // 요술봉 모드: connected components로 셀 추출
+          const { width, height } = data;
+          const { labeled, sizes } = connectedComponents(data);
+          const { blobs } = mergeSmallBlobs(labeled, width, height, sizes, minBlobSize);
+
+          cells = [];
+          for (const blob of blobs) {
+            let left = width, top = height, right = 0, bottom = 0;
+            for (const p of blob.pixels) {
+              if (p.x < left) left = p.x;
+              if (p.x > right) right = p.x;
+              if (p.y < top) top = p.y;
+              if (p.y > bottom) bottom = p.y;
+            }
+            right++;
+            bottom++;
+
+            const cellW = right - left;
+            const cellH = bottom - top;
+            const cellCanvas = document.createElement("canvas");
+            cellCanvas.width = cellW;
+            cellCanvas.height = cellH;
+            const cellCtx = cellCanvas.getContext("2d")!;
+            const cellData = cellCtx.createImageData(cellW, cellH);
+
+            const pixelSet = new Set<string>();
+            for (const p of blob.pixels) {
+              pixelSet.add(`${p.x},${p.y}`);
+            }
+
+            for (let y = top; y < bottom; y++) {
+              for (let x = left; x < right; x++) {
+                const srcIdx = (y * width + x) * 4;
+                const dstIdx = ((y - top) * cellW + (x - left)) * 4;
+                if (pixelSet.has(`${x},${y}`)) {
+                  cellData.data[dstIdx] = data.data[srcIdx];
+                  cellData.data[dstIdx + 1] = data.data[srcIdx + 1];
+                  cellData.data[dstIdx + 2] = data.data[srcIdx + 2];
+                  cellData.data[dstIdx + 3] = data.data[srcIdx + 3];
+                } else {
+                  cellData.data[dstIdx + 3] = 0;
+                }
+              }
+            }
+            cells.push(cellData);
+          }
+        } else {
+          // 사각 분할 모드
+          cells = splitGrid(data, columns, rows);
+        }
+
+        const outputSpec: OutputSpec = {
+          sizeMode,
+          width: fixedWidth,
+          height: fixedHeight,
+          aspectW,
+          aspectH,
+          longSide,
+          fitMode,
+          fillRatio,
           alignMode,
-          padding,
-          minBlobSize,
+          pixelArt,
         };
-        sliceResult = sliceSpriteByContour(data, options);
+
+        sliceResult = alignFramesWithSpec(cells, outputSpec);
       } else {
-        const options: SliceOptions = {
-          columns,
-          rows,
-          chromaKey: { targetColor: chromaColor, tolerance },
-          alignMode,
-          padding,
-        };
-        sliceResult = sliceSprite(data, options);
+        // 기존 방식 (하위호환)
+        if (sliceMode === "magicWand") {
+          const options: MagicWandOptions = {
+            chromaKey: { targetColor: chromaColor, tolerance },
+            alignMode,
+            padding,
+            minBlobSize,
+          };
+          sliceResult = sliceSpriteByContour(data, options);
+        } else {
+          const options: SliceOptions = {
+            columns,
+            rows,
+            chromaKey: { targetColor: chromaColor, tolerance },
+            alignMode,
+            padding,
+          };
+          sliceResult = sliceSprite(data, options);
+        }
       }
 
       if (sliceResult.frames.length === 0) {
@@ -390,6 +494,162 @@ export default function SpriteSlicer({ source }: SpriteSlicerProps) {
         >
           {processing ? "처리 중..." : "오리기 실행"}
         </button>
+      </div>
+
+      {/* 출력 규격 설정 */}
+      <div className="mb-4 p-4 bg-zinc-800/50 rounded-lg border border-zinc-700">
+        <div className="flex items-center gap-3 mb-3">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={useOutputSpec}
+              onChange={(e) => setUseOutputSpec(e.target.checked)}
+              className="w-4 h-4"
+            />
+            <span className="text-sm font-medium">출력 규격 사용</span>
+          </label>
+          {useOutputSpec && (
+            <span className="text-xs text-zinc-500">
+              모든 프레임을 동일 크기로 출력합니다
+            </span>
+          )}
+        </div>
+
+        {useOutputSpec && (
+          <div className="space-y-4">
+            {/* 크기 모드 */}
+            <div>
+              <label className="block text-xs text-zinc-400 mb-2">크기 모드</label>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setSizeMode("auto")}
+                  className={`px-3 py-1 text-xs rounded ${
+                    sizeMode === "auto" ? "bg-blue-600" : "bg-zinc-700 hover:bg-zinc-600"
+                  }`}
+                >
+                  자동
+                </button>
+                <button
+                  onClick={() => setSizeMode("fixed")}
+                  className={`px-3 py-1 text-xs rounded ${
+                    sizeMode === "fixed" ? "bg-blue-600" : "bg-zinc-700 hover:bg-zinc-600"
+                  }`}
+                >
+                  고정 크기
+                </button>
+                <button
+                  onClick={() => setSizeMode("aspect")}
+                  className={`px-3 py-1 text-xs rounded ${
+                    sizeMode === "aspect" ? "bg-blue-600" : "bg-zinc-700 hover:bg-zinc-600"
+                  }`}
+                >
+                  종횡비
+                </button>
+              </div>
+            </div>
+
+            {/* 고정 크기 입력 */}
+            {sizeMode === "fixed" && (
+              <div className="flex gap-3">
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">너비</label>
+                  <input
+                    type="number"
+                    min={32}
+                    max={1024}
+                    value={fixedWidth}
+                    onChange={(e) => setFixedWidth(Number(e.target.value))}
+                    className="w-20 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">높이</label>
+                  <input
+                    type="number"
+                    min={32}
+                    max={1024}
+                    value={fixedHeight}
+                    onChange={(e) => setFixedHeight(Number(e.target.value))}
+                    className="w-20 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-sm"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* 종횡비 설정 */}
+            {sizeMode === "aspect" && (
+              <div className="space-y-2">
+                <div className="flex gap-2 flex-wrap">
+                  {ASPECT_PRESETS.map((preset) => (
+                    <button
+                      key={preset.label}
+                      onClick={() => { setAspectW(preset.w); setAspectH(preset.h); }}
+                      className={`px-2 py-1 text-xs rounded ${
+                        aspectW === preset.w && aspectH === preset.h
+                          ? "bg-blue-600"
+                          : "bg-zinc-700 hover:bg-zinc-600"
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-400 mb-1">긴 변 길이</label>
+                  <input
+                    type="number"
+                    min={64}
+                    max={1024}
+                    value={longSide}
+                    onChange={(e) => setLongSide(Number(e.target.value))}
+                    className="w-24 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-sm"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* 맞춤 방식 & 채움 비율 */}
+            <div className="flex gap-4 flex-wrap">
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">맞춤 방식</label>
+                <select
+                  value={fitMode}
+                  onChange={(e) => setFitMode(e.target.value as FitMode)}
+                  className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-sm"
+                >
+                  <option value="contain">비율 유지 (contain)</option>
+                  <option value="height">높이 기준</option>
+                  <option value="width">너비 기준</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">
+                  채움 비율: {Math.round(fillRatio * 100)}%
+                </label>
+                <input
+                  type="range"
+                  min={0.5}
+                  max={1}
+                  step={0.05}
+                  value={fillRatio}
+                  onChange={(e) => setFillRatio(Number(e.target.value))}
+                  className="w-32"
+                />
+              </div>
+              <div className="flex items-end">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={pixelArt}
+                    onChange={(e) => setPixelArt(e.target.checked)}
+                    className="w-4 h-4"
+                  />
+                  <span className="text-xs">픽셀아트 모드</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {error && (

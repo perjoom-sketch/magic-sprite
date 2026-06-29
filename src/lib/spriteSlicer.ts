@@ -33,6 +33,37 @@ export interface SliceResult {
   canvasHeight: number;
 }
 
+// ─── Output Spec ──────────────────────────────────────────────────────
+
+export type SizeMode = "auto" | "fixed" | "aspect";
+export type FitMode = "height" | "width" | "contain";
+
+export interface OutputSpec {
+  /** 출력 캔버스 크기 결정 방식 */
+  sizeMode: SizeMode;
+
+  // fixed 모드
+  width?: number;
+  height?: number;
+
+  // aspect 모드
+  aspectW?: number;
+  aspectH?: number;
+  longSide?: number;
+
+  /** 캐릭터를 캔버스에 맞추는 방식 */
+  fitMode: FitMode;
+
+  /** 캐릭터가 캔버스에서 차지할 비율 (0~1, 기본 0.8) */
+  fillRatio: number;
+
+  /** 정렬 모드 */
+  alignMode: AlignMode;
+
+  /** 픽셀아트 스타일 유지 (imageSmoothingEnabled = false) */
+  pixelArt?: boolean;
+}
+
 // ─── Grid Auto-Detection ──────────────────────────────────────────────
 
 /**
@@ -277,6 +308,129 @@ export function alignFrames(
     cropCtx.putImageData(cropData, 0, 0);
 
     ctx.drawImage(cropCanvas, ox, oy);
+    frames.push(ctx.getImageData(0, 0, canvasWidth, canvasHeight));
+  }
+
+  return { frames, canvasWidth, canvasHeight };
+}
+
+/**
+ * 출력 규격을 적용하여 프레임 생성.
+ * OutputSpec에 따라 캔버스 크기 결정 + 캐릭터 스케일 + 정렬.
+ */
+export function alignFramesWithSpec(
+  cells: ImageData[],
+  spec: OutputSpec
+): SliceResult {
+  const boxes = cells.map(c => getBoundingBox(c));
+
+  // 빈 프레임 제거
+  const validIndices = boxes.map((b, i) => b ? i : -1).filter(i => i >= 0);
+  const validBoxes = validIndices.map(i => boxes[i]!);
+  const validCells = validIndices.map(i => cells[i]);
+
+  if (validBoxes.length === 0) {
+    return { frames: [], canvasWidth: 0, canvasHeight: 0 };
+  }
+
+  // 1. 캐릭터 최대 크기 계산
+  const maxCharW = Math.max(...validBoxes.map(b => b.right - b.left));
+  const maxCharH = Math.max(...validBoxes.map(b => b.bottom - b.top));
+
+  // 2. 출력 캔버스 크기 결정
+  let canvasWidth: number;
+  let canvasHeight: number;
+
+  if (spec.sizeMode === "fixed" && spec.width && spec.height) {
+    canvasWidth = spec.width;
+    canvasHeight = spec.height;
+  } else if (spec.sizeMode === "aspect" && spec.aspectW && spec.aspectH && spec.longSide) {
+    const ratio = spec.aspectW / spec.aspectH;
+    if (ratio >= 1) {
+      // 가로가 긴 변
+      canvasWidth = spec.longSide;
+      canvasHeight = Math.round(spec.longSide / ratio);
+    } else {
+      // 세로가 긴 변
+      canvasHeight = spec.longSide;
+      canvasWidth = Math.round(spec.longSide * ratio);
+    }
+  } else {
+    // auto: 기존 동작 (캐릭터 크기 기준, 여백은 fillRatio로 계산)
+    const padding = Math.round(maxCharW * (1 - spec.fillRatio) / 2);
+    canvasWidth = maxCharW + padding * 2;
+    canvasHeight = maxCharH + padding * 2;
+  }
+
+  // 3. 공통 스케일 계산 (가장 큰 캐릭터 기준)
+  const targetW = canvasWidth * spec.fillRatio;
+  const targetH = canvasHeight * spec.fillRatio;
+
+  let scale: number;
+  if (spec.fitMode === "height") {
+    scale = targetH / maxCharH;
+  } else if (spec.fitMode === "width") {
+    scale = targetW / maxCharW;
+  } else {
+    // contain: 캐릭터가 캔버스에 완전히 들어가도록
+    scale = Math.min(targetW / maxCharW, targetH / maxCharH);
+  }
+
+  // 업스케일 경고 (1.5배 이상은 화질 저하)
+  if (scale > 1.5) {
+    console.warn(`[alignFramesWithSpec] 스케일 ${scale.toFixed(2)}x — 화질 저하 가능`);
+  }
+
+  // 4. 프레임 생성
+  const canvas = document.createElement("canvas");
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
+  const ctx = canvas.getContext("2d")!;
+
+  // 픽셀아트 모드
+  ctx.imageSmoothingEnabled = spec.pixelArt !== true;
+
+  const frames: ImageData[] = [];
+
+  for (let i = 0; i < validCells.length; i++) {
+    const cell = validCells[i];
+    const box = validBoxes[i];
+    const cropW = box.right - box.left;
+    const cropH = box.bottom - box.top;
+
+    // 셀에서 크롭 추출
+    const tmpCanvas = document.createElement("canvas");
+    tmpCanvas.width = cell.width;
+    tmpCanvas.height = cell.height;
+    const tmpCtx = tmpCanvas.getContext("2d")!;
+    tmpCtx.putImageData(cell, 0, 0);
+
+    // 크롭 캔버스 생성
+    const cropCanvas = document.createElement("canvas");
+    cropCanvas.width = cropW;
+    cropCanvas.height = cropH;
+    const cropCtx = cropCanvas.getContext("2d")!;
+    cropCtx.drawImage(tmpCanvas, box.left, box.top, cropW, cropH, 0, 0, cropW, cropH);
+
+    // 스케일된 크기
+    const scaledW = Math.round(cropW * scale);
+    const scaledH = Math.round(cropH * scale);
+
+    // 정렬된 캔버스에 배치
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+    const ox = Math.floor((canvasWidth - scaledW) / 2); // 가로 중앙
+    let oy: number;
+    if (spec.alignMode === "bottom") {
+      // 발 기준: 바닥 정렬 (여백 = 캔버스 높이 * (1 - fillRatio) / 2)
+      const bottomMargin = Math.floor(canvasHeight * (1 - spec.fillRatio) / 2);
+      oy = canvasHeight - bottomMargin - scaledH;
+    } else {
+      oy = Math.floor((canvasHeight - scaledH) / 2); // 중심 정렬
+    }
+
+    // 스케일 적용하여 그리기
+    ctx.drawImage(cropCanvas, 0, 0, cropW, cropH, ox, oy, scaledW, scaledH);
     frames.push(ctx.getImageData(0, 0, canvasWidth, canvasHeight));
   }
 
