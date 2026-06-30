@@ -339,27 +339,45 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
       {/* 프레임 프리뷰 + 타임라인 */}
       {videoUrl && thumbnails.length > 0 && !decoding && (
         <>
-          {/* 현재 프레임 프리뷰 */}
-          <div className="bg-zinc-800 rounded p-4">
-            {looping && thumbnails[previewIdx] ? (
-              <img
-                src={thumbnails[previewIdx]}
-                alt={`Frame ${previewIdx}`}
-                className="max-h-48 mx-auto rounded pixelated"
-                style={{ imageRendering: "pixelated" }}
-              />
-            ) : thumbnails[trimStartIdx] ? (
-              <img
-                src={thumbnails[trimStartIdx]}
-                alt={`Frame ${trimStartIdx}`}
-                className="max-h-48 mx-auto rounded pixelated"
-                style={{ imageRendering: "pixelated" }}
-              />
-            ) : null}
-            <div className="text-center text-xs text-zinc-500 mt-2">
-              {looping ? `재생 중: ${previewIdx}번` : `시작 프레임: ${trimStartIdx}번`}
+          {/* 시작/끝 프레임 미리보기 (2개 나란히) */}
+          <div className="grid grid-cols-2 gap-4">
+            {/* 시작 프레임 */}
+            <div className="bg-zinc-800 rounded p-4">
+              {thumbnails[trimStartIdx] && (
+                <img
+                  src={thumbnails[trimStartIdx]}
+                  alt={`Start Frame ${trimStartIdx}`}
+                  className="w-full max-h-80 object-contain mx-auto rounded"
+                  style={{ imageRendering: "pixelated" }}
+                />
+              )}
+              <div className="text-center text-xs text-green-400 mt-2 font-medium">
+                시작: {trimStartIdx}번
+              </div>
+            </div>
+
+            {/* 끝 프레임 */}
+            <div className="bg-zinc-800 rounded p-4">
+              {thumbnails[trimEndIdx - 1] && (
+                <img
+                  src={thumbnails[trimEndIdx - 1]}
+                  alt={`End Frame ${trimEndIdx - 1}`}
+                  className="w-full max-h-80 object-contain mx-auto rounded"
+                  style={{ imageRendering: "pixelated" }}
+                />
+              )}
+              <div className="text-center text-xs text-red-400 mt-2 font-medium">
+                끝: {trimEndIdx - 1}번
+              </div>
             </div>
           </div>
+
+          {/* 구간 루프 재생 중일 때 현재 프레임 표시 */}
+          {looping && (
+            <div className="text-center text-xs text-blue-400">
+              루프 재생 중: {previewIdx}번 프레임
+            </div>
+          )}
 
           {/* 타임라인 썸네일 스트립 + 트림 핸들 */}
           <div className="space-y-2">
