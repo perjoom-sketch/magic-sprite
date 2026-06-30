@@ -31,7 +31,16 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
   const [isGif, setIsGif] = useState(false);
   const [gifFrameCount, setGifFrameCount] = useState(0);
 
-  // 트림 설정
+  // 디코딩된 전체 프레임 (타임라인용)
+  const [allFrames, setAllFrames] = useState<ImageData[]>([]);
+  const [thumbnails, setThumbnails] = useState<string[]>([]);
+  const [decoding, setDecoding] = useState(false);
+
+  // 트림 설정 (인덱스 기반)
+  const [trimStartIdx, setTrimStartIdx] = useState(0);
+  const [trimEndIdx, setTrimEndIdx] = useState(0);
+
+  // 비디오용 트림 (시간 기반)
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
 
@@ -45,9 +54,31 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [looping, setLooping] = useState(false);
+  const [previewIdx, setPreviewIdx] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const loopIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ImageData를 썸네일 URL로 변환
+  const frameToThumbnail = useCallback((frame: ImageData, maxSize = 60): string => {
+    const canvas = document.createElement("canvas");
+    const scale = Math.min(maxSize / frame.width, maxSize / frame.height);
+    canvas.width = Math.floor(frame.width * scale);
+    canvas.height = Math.floor(frame.height * scale);
+    const ctx = canvas.getContext("2d")!;
+
+    // 원본 크기 캔버스에 ImageData 그리기
+    const tempCanvas = document.createElement("canvas");
+    tempCanvas.width = frame.width;
+    tempCanvas.height = frame.height;
+    const tempCtx = tempCanvas.getContext("2d")!;
+    tempCtx.putImageData(frame, 0, 0);
+
+    // 축소해서 그리기
+    ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
+  }, []);
 
   // 파일 업로드
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -58,6 +89,13 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
     if (videoUrl) {
       URL.revokeObjectURL(videoUrl);
     }
+
+    // 상태 초기화
+    setAllFrames([]);
+    setThumbnails([]);
+    setTrimStartIdx(0);
+    setTrimEndIdx(0);
+    setLooping(false);
 
     const url = URL.createObjectURL(file);
     setVideoUrl(url);
@@ -76,6 +114,21 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
         setGifFrameCount(meta.frameCount);
         setTrimStart(0);
         setTrimEnd(meta.duration);
+
+        // GIF 전체 프레임 디코딩 + 타임라인 생성
+        setDecoding(true);
+        try {
+          const gifResult = await extractGifFrames(url);
+          setAllFrames(gifResult.frames);
+          setTrimStartIdx(0);
+          setTrimEndIdx(gifResult.frames.length);
+
+          // 썸네일 생성
+          const thumbs = gifResult.frames.map((f) => frameToThumbnail(f));
+          setThumbnails(thumbs);
+        } finally {
+          setDecoding(false);
+        }
       } else {
         const meta = await getVideoMetadata(url);
         setDuration(meta.duration);
@@ -84,80 +137,83 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
         setGifFrameCount(0);
         setTrimStart(0);
         setTrimEnd(meta.duration);
+
+        // 비디오는 먼저 전체 프레임 추출
+        setDecoding(true);
+        try {
+          const result = await extractFrames(url, { fps, startSec: 0, endSec: meta.duration });
+          setAllFrames(result.frames);
+          setTrimStartIdx(0);
+          setTrimEndIdx(result.frames.length);
+
+          // 썸네일 생성
+          const thumbs = result.frames.map((f) => frameToThumbnail(f));
+          setThumbnails(thumbs);
+        } finally {
+          setDecoding(false);
+        }
       }
     } catch (err) {
       setError(fileIsGif ? "GIF 메타데이터를 읽을 수 없습니다." : "영상 메타데이터를 읽을 수 없습니다.");
     }
   };
 
-  // 루프 재생 제어
+  // 구간 루프 프리뷰 (프레임 인덱스 기반)
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !looping) return;
+    if (!looping || allFrames.length === 0) {
+      if (loopIntervalRef.current) {
+        clearInterval(loopIntervalRef.current);
+        loopIntervalRef.current = null;
+      }
+      return;
+    }
 
-    const checkLoop = () => {
-      if (video.currentTime >= trimEnd) {
-        video.currentTime = trimStart;
+    const startIdx = trimStartIdx;
+    const endIdx = Math.max(trimStartIdx + 1, trimEndIdx);
+    let currentIdx = startIdx;
+    setPreviewIdx(currentIdx);
+
+    // 프레임 간격 (약 100ms = 10fps)
+    loopIntervalRef.current = setInterval(() => {
+      currentIdx++;
+      if (currentIdx >= endIdx) {
+        currentIdx = startIdx;
+      }
+      setPreviewIdx(currentIdx);
+    }, 100);
+
+    return () => {
+      if (loopIntervalRef.current) {
+        clearInterval(loopIntervalRef.current);
+        loopIntervalRef.current = null;
       }
     };
+  }, [looping, trimStartIdx, trimEndIdx, allFrames.length]);
 
-    video.currentTime = trimStart;
-    video.play();
-
-    const interval = setInterval(checkLoop, 50);
-    return () => {
-      clearInterval(interval);
-      video.pause();
-    };
-  }, [looping, trimStart, trimEnd]);
-
-  // 트림 범위 변경 시 비디오 위치 이동
-  const handleTrimStartChange = (value: number) => {
-    setTrimStart(value);
-    if (videoRef.current && !looping) {
-      videoRef.current.currentTime = value;
-    }
+  // 트림 핸들 변경
+  const handleTrimStartIdxChange = (value: number) => {
+    const newStart = Math.min(value, trimEndIdx - 1);
+    setTrimStartIdx(Math.max(0, newStart));
   };
 
-  const handleTrimEndChange = (value: number) => {
-    setTrimEnd(value);
+  const handleTrimEndIdxChange = (value: number) => {
+    const newEnd = Math.max(value, trimStartIdx + 1);
+    setTrimEndIdx(Math.min(allFrames.length, newEnd));
   };
 
-  // 프레임 추출
+  // 프레임 추출 (트림된 구간만)
   const handleExtract = async () => {
-    if (!videoUrl) return;
+    if (allFrames.length === 0) {
+      setError("먼저 영상을 업로드하세요.");
+      return;
+    }
 
     setProcessing(true);
     setError(null);
 
     try {
-      let frames: ImageData[];
-
-      if (isGif) {
-        // GIF 프레임 추출 (전체 프레임 추출 후 필요시 샘플링)
-        const gifResult = await extractGifFrames(videoUrl);
-        frames = gifResult.frames;
-
-        // FPS에 따른 프레임 샘플링 (GIF의 원래 프레임 수가 많을 경우)
-        if (fps < gifResult.frameCount / duration) {
-          const targetFrameCount = Math.floor(duration * fps);
-          const step = gifResult.frameCount / targetFrameCount;
-          const sampledFrames: ImageData[] = [];
-          for (let i = 0; i < targetFrameCount; i++) {
-            const idx = Math.min(Math.floor(i * step), gifResult.frameCount - 1);
-            sampledFrames.push(frames[idx]);
-          }
-          frames = sampledFrames;
-        }
-      } else {
-        // 비디오 프레임 추출
-        const result = await extractFrames(videoUrl, {
-          fps,
-          startSec: trimStart,
-          endSec: trimEnd,
-        });
-        frames = result.frames;
-      }
+      // 트림된 프레임만 추출 (인덱스 기반 slice)
+      let frames = allFrames.slice(trimStartIdx, trimEndIdx);
 
       // 크로마키 적용
       if (useChromaKey) {
@@ -184,9 +240,8 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
     }
   };
 
-  const estimatedFrames = isGif
-    ? gifFrameCount
-    : Math.max(0, Math.floor((trimEnd - trimStart) * fps));
+  // 선택된 프레임 수 (트림 구간)
+  const selectedFrameCount = Math.max(0, trimEndIdx - trimStartIdx);
 
   return (
     <div className="space-y-4">
@@ -213,106 +268,143 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
         )}
       </div>
 
-      {/* 비디오/GIF 프리뷰 */}
-      {videoUrl && (
+      {/* 디코딩 상태 */}
+      {decoding && (
+        <div className="p-4 bg-zinc-800 rounded text-center">
+          <div className="text-sm text-zinc-400">프레임 디코딩 중...</div>
+        </div>
+      )}
+
+      {/* 프레임 프리뷰 + 타임라인 */}
+      {videoUrl && thumbnails.length > 0 && !decoding && (
         <>
+          {/* 현재 프레임 프리뷰 */}
           <div className="bg-zinc-800 rounded p-4">
-            {isGif ? (
+            {looping && thumbnails[previewIdx] ? (
               <img
-                src={videoUrl}
-                alt="GIF Preview"
-                className="max-w-full max-h-64 mx-auto rounded"
+                src={thumbnails[previewIdx]}
+                alt={`Frame ${previewIdx}`}
+                className="max-h-48 mx-auto rounded pixelated"
+                style={{ imageRendering: "pixelated" }}
               />
-            ) : (
-              <video
-                ref={videoRef}
-                src={videoUrl}
-                className="max-w-full max-h-64 mx-auto rounded"
-                controls={!looping}
-                muted
-                playsInline
+            ) : thumbnails[trimStartIdx] ? (
+              <img
+                src={thumbnails[trimStartIdx]}
+                alt={`Frame ${trimStartIdx}`}
+                className="max-h-48 mx-auto rounded pixelated"
+                style={{ imageRendering: "pixelated" }}
               />
-            )}
+            ) : null}
+            <div className="text-center text-xs text-zinc-500 mt-2">
+              {looping ? `재생 중: ${previewIdx}번` : `시작 프레임: ${trimStartIdx}번`}
+            </div>
           </div>
 
-          {/* 트림 설정 - 비디오 전용 */}
-          {!isGif && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium">트림 (한 보폭 주기 선택)</label>
-                <button
-                  onClick={() => setLooping(!looping)}
-                  className={`px-3 py-1 text-xs rounded ${
-                    looping ? "bg-blue-600" : "bg-zinc-700 hover:bg-zinc-600"
-                  }`}
-                >
-                  {looping ? "⏸ 루프 정지" : "▶ 루프 재생"}
-                </button>
-              </div>
+          {/* 타임라인 썸네일 스트립 */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">
+                타임라인 (전체 {allFrames.length}프레임)
+              </label>
+              <button
+                onClick={() => setLooping(!looping)}
+                className={`px-3 py-1 text-xs rounded ${
+                  looping ? "bg-blue-600" : "bg-zinc-700 hover:bg-zinc-600"
+                }`}
+              >
+                {looping ? "⏸ 루프 정지" : "▶ 구간 루프"}
+              </button>
+            </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1">
-                    시작: {trimStart.toFixed(2)}초
-                  </label>
-                  <input
-                    type="range"
-                    min={0}
-                    max={duration}
-                    step={0.01}
-                    value={trimStart}
-                    onChange={(e) => handleTrimStartChange(Number(e.target.value))}
-                    className="w-full"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1">
-                    종료: {trimEnd.toFixed(2)}초
-                  </label>
-                  <input
-                    type="range"
-                    min={0}
-                    max={duration}
-                    step={0.01}
-                    value={trimEnd}
-                    onChange={(e) => handleTrimEndChange(Number(e.target.value))}
-                    className="w-full"
-                  />
-                </div>
-              </div>
-
-              <div className="text-xs text-zinc-500">
-                선택 구간: {(trimEnd - trimStart).toFixed(2)}초
+            {/* 썸네일 스트립 (가로 스크롤) */}
+            <div className="overflow-x-auto pb-2">
+              <div className="flex gap-1" style={{ minWidth: "max-content" }}>
+                {thumbnails.map((thumb, idx) => {
+                  const isSelected = idx >= trimStartIdx && idx < trimEndIdx;
+                  const isStart = idx === trimStartIdx;
+                  const isEnd = idx === trimEndIdx - 1;
+                  return (
+                    <div
+                      key={idx}
+                      className={`relative cursor-pointer transition-all ${
+                        isSelected
+                          ? "ring-2 ring-blue-500 opacity-100"
+                          : "opacity-40 hover:opacity-70"
+                      } ${isStart ? "ring-green-500" : ""} ${isEnd ? "ring-red-500" : ""}`}
+                      onClick={() => {
+                        // 클릭으로 시작점 설정
+                        if (idx < trimEndIdx - 1) {
+                          setTrimStartIdx(idx);
+                        }
+                      }}
+                      onContextMenu={(e) => {
+                        // 우클릭으로 끝점 설정
+                        e.preventDefault();
+                        if (idx > trimStartIdx) {
+                          setTrimEndIdx(idx + 1);
+                        }
+                      }}
+                    >
+                      <img
+                        src={thumb}
+                        alt={`Frame ${idx}`}
+                        className="h-12 rounded"
+                        style={{ imageRendering: "pixelated" }}
+                      />
+                      <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[10px] text-center text-white">
+                        {idx}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
-          )}
 
-          {/* 추출 설정 */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {isGif ? (
+            {/* 트림 슬라이더 */}
+            <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs text-zinc-400 mb-1">
-                  GIF 프레임: {gifFrameCount}장
-                </label>
-                <div className="text-xs text-zinc-500 mt-2">
-                  전체 프레임 추출됨
-                </div>
-              </div>
-            ) : (
-              <div>
-                <label className="block text-xs text-zinc-400 mb-1">
-                  FPS: {fps} (예상 {estimatedFrames}프레임)
+                  시작: {trimStartIdx}번
                 </label>
                 <input
                   type="range"
-                  min={4}
-                  max={30}
-                  value={fps}
-                  onChange={(e) => setFps(Number(e.target.value))}
+                  min={0}
+                  max={allFrames.length - 1}
+                  value={trimStartIdx}
+                  onChange={(e) => handleTrimStartIdxChange(Number(e.target.value))}
                   className="w-full"
                 />
               </div>
-            )}
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">
+                  끝: {trimEndIdx - 1}번
+                </label>
+                <input
+                  type="range"
+                  min={1}
+                  max={allFrames.length}
+                  value={trimEndIdx}
+                  onChange={(e) => handleTrimEndIdxChange(Number(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+            </div>
+
+            <div className="text-xs text-zinc-500">
+              선택 구간: {trimStartIdx}~{trimEndIdx - 1}번 ({selectedFrameCount}프레임)
+            </div>
+          </div>
+
+          {/* 추출 설정 */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs text-zinc-400 mb-1">
+                선택 프레임: {selectedFrameCount}장
+              </label>
+              <div className="text-xs text-zinc-500 mt-2">
+                인덱스 {trimStartIdx}~{trimEndIdx - 1}
+              </div>
+            </div>
 
             <div>
               <label className="block text-xs text-zinc-400 mb-1">Tolerance</label>
@@ -364,10 +456,10 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
           {/* 추출 버튼 */}
           <button
             onClick={handleExtract}
-            disabled={processing || (!isGif && trimStart >= trimEnd)}
+            disabled={processing || selectedFrameCount === 0}
             className="w-full py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded font-medium"
           >
-            {processing ? "추출 중..." : `프레임 추출 (${isGif ? "" : "약 "}${estimatedFrames}장)`}
+            {processing ? "추출 중..." : `구간 추출 (${selectedFrameCount}장)`}
           </button>
         </>
       )}
