@@ -33,7 +33,8 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
 
   // 디코딩된 전체 프레임 (타임라인용)
   const [allFrames, setAllFrames] = useState<ImageData[]>([]);
-  const [thumbnails, setThumbnails] = useState<string[]>([]);
+  const [thumbnails, setThumbnails] = useState<string[]>([]);  // 타임라인용 (작은 썸네일)
+  const [previews, setPreviews] = useState<string[]>([]);      // 미리보기용 (원본 해상도)
   const [decoding, setDecoding] = useState(false);
 
   // 트림 설정 (인덱스 기반)
@@ -80,14 +81,8 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
     ? Math.max(4, timelineWidth / thumbnails.length)
     : 48;
 
-  // ImageData를 썸네일 URL로 변환
-  const frameToThumbnail = useCallback((frame: ImageData, maxSize = 60): string => {
-    const canvas = document.createElement("canvas");
-    const scale = Math.min(maxSize / frame.width, maxSize / frame.height);
-    canvas.width = Math.floor(frame.width * scale);
-    canvas.height = Math.floor(frame.height * scale);
-    const ctx = canvas.getContext("2d")!;
-
+  // ImageData를 이미지 URL로 변환
+  const frameToDataUrl = useCallback((frame: ImageData, maxSize?: number): string => {
     // 원본 크기 캔버스에 ImageData 그리기
     const tempCanvas = document.createElement("canvas");
     tempCanvas.width = frame.width;
@@ -95,9 +90,18 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
     const tempCtx = tempCanvas.getContext("2d")!;
     tempCtx.putImageData(frame, 0, 0);
 
-    // 축소해서 그리기
-    ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL("image/png");
+    // maxSize가 지정되면 축소, 아니면 원본 크기
+    if (maxSize && (frame.width > maxSize || frame.height > maxSize)) {
+      const canvas = document.createElement("canvas");
+      const scale = Math.min(maxSize / frame.width, maxSize / frame.height);
+      canvas.width = Math.floor(frame.width * scale);
+      canvas.height = Math.floor(frame.height * scale);
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL("image/png");
+    }
+
+    return tempCanvas.toDataURL("image/png");
   }, []);
 
   // 파일 업로드
@@ -113,6 +117,7 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
     // 상태 초기화
     setAllFrames([]);
     setThumbnails([]);
+    setPreviews([]);
     setTrimStartIdx(0);
     setTrimEndIdx(0);
     setLooping(false);
@@ -143,9 +148,11 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
           setTrimStartIdx(0);
           setTrimEndIdx(gifResult.frames.length);
 
-          // 썸네일 생성
-          const thumbs = gifResult.frames.map((f) => frameToThumbnail(f));
+          // 타임라인용 썸네일 (60px) + 미리보기용 (원본 해상도)
+          const thumbs = gifResult.frames.map((f) => frameToDataUrl(f, 60));
+          const prevs = gifResult.frames.map((f) => frameToDataUrl(f));
           setThumbnails(thumbs);
+          setPreviews(prevs);
         } finally {
           setDecoding(false);
         }
@@ -166,9 +173,11 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
           setTrimStartIdx(0);
           setTrimEndIdx(result.frames.length);
 
-          // 썸네일 생성
-          const thumbs = result.frames.map((f) => frameToThumbnail(f));
+          // 타임라인용 썸네일 (60px) + 미리보기용 (원본 해상도)
+          const thumbs = result.frames.map((f) => frameToDataUrl(f, 60));
+          const prevs = result.frames.map((f) => frameToDataUrl(f));
           setThumbnails(thumbs);
+          setPreviews(prevs);
         } finally {
           setDecoding(false);
         }
@@ -339,16 +348,15 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
       {/* 프레임 프리뷰 + 타임라인 */}
       {videoUrl && thumbnails.length > 0 && !decoding && (
         <>
-          {/* 시작/끝 프레임 미리보기 (2개 나란히) */}
+          {/* 시작/끝 프레임 미리보기 (2개 나란히, 원본 해상도) */}
           <div className="grid grid-cols-2 gap-4">
             {/* 시작 프레임 */}
             <div className="bg-zinc-800 rounded p-4">
-              {thumbnails[trimStartIdx] && (
+              {previews[trimStartIdx] && (
                 <img
-                  src={thumbnails[trimStartIdx]}
+                  src={previews[trimStartIdx]}
                   alt={`Start Frame ${trimStartIdx}`}
                   className="w-full max-h-80 object-contain mx-auto rounded"
-                  style={{ imageRendering: "auto" }}
                 />
               )}
               <div className="text-center text-xs text-green-400 mt-2 font-medium">
@@ -358,12 +366,11 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
 
             {/* 끝 프레임 */}
             <div className="bg-zinc-800 rounded p-4">
-              {thumbnails[trimEndIdx - 1] && (
+              {previews[trimEndIdx - 1] && (
                 <img
-                  src={thumbnails[trimEndIdx - 1]}
+                  src={previews[trimEndIdx - 1]}
                   alt={`End Frame ${trimEndIdx - 1}`}
                   className="w-full max-h-80 object-contain mx-auto rounded"
-                  style={{ imageRendering: "auto" }}
                 />
               )}
               <div className="text-center text-xs text-red-400 mt-2 font-medium">
