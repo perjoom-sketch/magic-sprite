@@ -348,7 +348,7 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
                   src={thumbnails[trimStartIdx]}
                   alt={`Start Frame ${trimStartIdx}`}
                   className="w-full max-h-80 object-contain mx-auto rounded"
-                  style={{ imageRendering: "pixelated" }}
+                  style={{ imageRendering: "auto" }}
                 />
               )}
               <div className="text-center text-xs text-green-400 mt-2 font-medium">
@@ -363,7 +363,7 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
                   src={thumbnails[trimEndIdx - 1]}
                   alt={`End Frame ${trimEndIdx - 1}`}
                   className="w-full max-h-80 object-contain mx-auto rounded"
-                  style={{ imageRendering: "pixelated" }}
+                  style={{ imageRendering: "auto" }}
                 />
               )}
               <div className="text-center text-xs text-red-400 mt-2 font-medium">
