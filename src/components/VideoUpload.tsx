@@ -59,6 +59,8 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const loopIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState<"start" | "end" | null>(null);
 
   // ImageData를 썸네일 URL로 변환
   const frameToThumbnail = useCallback((frame: ImageData, maxSize = 60): string => {
@@ -201,6 +203,50 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
     setTrimEndIdx(Math.min(allFrames.length, newEnd));
   };
 
+  // 드래그로 핸들 위치 계산
+  const getIndexFromMouseX = useCallback((clientX: number): number => {
+    if (!timelineRef.current || thumbnails.length === 0) return 0;
+    const rect = timelineRef.current.getBoundingClientRect();
+    const scrollLeft = timelineRef.current.scrollLeft;
+    const x = clientX - rect.left + scrollLeft;
+    // 썸네일 하나당 약 52px (48px + gap 4px)
+    const thumbWidth = 52;
+    const idx = Math.floor(x / thumbWidth);
+    return Math.max(0, Math.min(thumbnails.length - 1, idx));
+  }, [thumbnails.length]);
+
+  // 드래그 이벤트 핸들러
+  const handleMouseDown = (handle: "start" | "end") => (e: React.MouseEvent) => {
+    e.preventDefault();
+    setDragging(handle);
+  };
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!dragging) return;
+    const idx = getIndexFromMouseX(e.clientX);
+    if (dragging === "start") {
+      handleTrimStartIdxChange(idx);
+    } else {
+      handleTrimEndIdxChange(idx + 1);
+    }
+  }, [dragging, getIndexFromMouseX]);
+
+  const handleMouseUp = useCallback(() => {
+    setDragging(null);
+  }, []);
+
+  // 드래그 이벤트 등록
+  useEffect(() => {
+    if (dragging) {
+      window.addEventListener("mousemove", handleMouseMove);
+      window.addEventListener("mouseup", handleMouseUp);
+      return () => {
+        window.removeEventListener("mousemove", handleMouseMove);
+        window.removeEventListener("mouseup", handleMouseUp);
+      };
+    }
+  }, [dragging, handleMouseMove, handleMouseUp]);
+
   // 프레임 추출 (트림된 구간만)
   const handleExtract = async () => {
     if (allFrames.length === 0) {
@@ -300,7 +346,7 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
             </div>
           </div>
 
-          {/* 타임라인 썸네일 스트립 */}
+          {/* 타임라인 썸네일 스트립 + 트림 핸들 */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-sm font-medium">
@@ -316,82 +362,84 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
               </button>
             </div>
 
-            {/* 썸네일 스트립 (가로 스크롤) */}
-            <div className="overflow-x-auto pb-2">
-              <div className="flex gap-1" style={{ minWidth: "max-content" }}>
-                {thumbnails.map((thumb, idx) => {
-                  const isSelected = idx >= trimStartIdx && idx < trimEndIdx;
-                  const isStart = idx === trimStartIdx;
-                  const isEnd = idx === trimEndIdx - 1;
-                  return (
-                    <div
-                      key={idx}
-                      className={`relative cursor-pointer transition-all ${
-                        isSelected
-                          ? "ring-2 ring-blue-500 opacity-100"
-                          : "opacity-40 hover:opacity-70"
-                      } ${isStart ? "ring-green-500" : ""} ${isEnd ? "ring-red-500" : ""}`}
-                      onClick={() => {
-                        // 클릭으로 시작점 설정
-                        if (idx < trimEndIdx - 1) {
-                          setTrimStartIdx(idx);
-                        }
-                      }}
-                      onContextMenu={(e) => {
-                        // 우클릭으로 끝점 설정
-                        e.preventDefault();
-                        if (idx > trimStartIdx) {
-                          setTrimEndIdx(idx + 1);
-                        }
-                      }}
-                    >
-                      <img
-                        src={thumb}
-                        alt={`Frame ${idx}`}
-                        className="h-12 rounded"
-                        style={{ imageRendering: "pixelated" }}
-                      />
-                      <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[10px] text-center text-white">
-                        {idx}
+            {/* 타임라인 컨테이너 (핸들 포함) */}
+            <div className="relative">
+              {/* 썸네일 스트립 (가로 스크롤) */}
+              <div
+                ref={timelineRef}
+                className="overflow-x-auto pb-2"
+                style={{ cursor: dragging ? "grabbing" : "default" }}
+              >
+                <div className="flex gap-1 relative" style={{ minWidth: "max-content" }}>
+                  {thumbnails.map((thumb, idx) => {
+                    const isSelected = idx >= trimStartIdx && idx < trimEndIdx;
+                    return (
+                      <div
+                        key={idx}
+                        className={`relative transition-opacity ${
+                          isSelected ? "opacity-100" : "opacity-30"
+                        }`}
+                      >
+                        <img
+                          src={thumb}
+                          alt={`Frame ${idx}`}
+                          className="h-12 rounded"
+                          style={{ imageRendering: "pixelated" }}
+                        />
+                        <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[10px] text-center text-white">
+                          {idx}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+
+                  {/* 시작 핸들 (녹색) */}
+                  <div
+                    className="absolute top-0 bottom-0 w-3 bg-green-500 cursor-ew-resize z-10 flex items-center justify-center hover:bg-green-400 transition-colors"
+                    style={{
+                      left: `${trimStartIdx * 52}px`,
+                      borderRadius: "4px 0 0 4px"
+                    }}
+                    onMouseDown={handleMouseDown("start")}
+                  >
+                    <div className="w-1 h-6 bg-white/50 rounded" />
+                  </div>
+
+                  {/* 끝 핸들 (빨간색) */}
+                  <div
+                    className="absolute top-0 bottom-0 w-3 bg-red-500 cursor-ew-resize z-10 flex items-center justify-center hover:bg-red-400 transition-colors"
+                    style={{
+                      left: `${trimEndIdx * 52 - 12}px`,
+                      borderRadius: "0 4px 4px 0"
+                    }}
+                    onMouseDown={handleMouseDown("end")}
+                  >
+                    <div className="w-1 h-6 bg-white/50 rounded" />
+                  </div>
+
+                  {/* 선택 영역 상단 바 */}
+                  <div
+                    className="absolute top-0 h-1 bg-blue-500 z-5"
+                    style={{
+                      left: `${trimStartIdx * 52 + 12}px`,
+                      width: `${(trimEndIdx - trimStartIdx) * 52 - 24}px`
+                    }}
+                  />
+                </div>
               </div>
             </div>
 
-            {/* 트림 슬라이더 */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs text-zinc-400 mb-1">
-                  시작: {trimStartIdx}번
-                </label>
-                <input
-                  type="range"
-                  min={0}
-                  max={allFrames.length - 1}
-                  value={trimStartIdx}
-                  onChange={(e) => handleTrimStartIdxChange(Number(e.target.value))}
-                  className="w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-zinc-400 mb-1">
-                  끝: {trimEndIdx - 1}번
-                </label>
-                <input
-                  type="range"
-                  min={1}
-                  max={allFrames.length}
-                  value={trimEndIdx}
-                  onChange={(e) => handleTrimEndIdxChange(Number(e.target.value))}
-                  className="w-full"
-                />
-              </div>
-            </div>
-
-            <div className="text-xs text-zinc-500">
-              선택 구간: {trimStartIdx}~{trimEndIdx - 1}번 ({selectedFrameCount}프레임)
+            {/* 선택 정보 텍스트 */}
+            <div className="flex items-center justify-between text-xs text-zinc-400">
+              <span>
+                시작: <span className="text-green-400 font-medium">{trimStartIdx}번</span>
+              </span>
+              <span className="text-zinc-500">
+                선택: {selectedFrameCount}프레임 ({trimStartIdx}~{trimEndIdx - 1})
+              </span>
+              <span>
+                끝: <span className="text-red-400 font-medium">{trimEndIdx - 1}번</span>
+              </span>
             </div>
           </div>
 
