@@ -554,7 +554,7 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
         </div>
         {sliceMode === "magicWand" && (
           <p className="text-xs text-zinc-500 mt-1">
-            캐릭터를 덩어리로 자동 분리합니다. 여백이 좁아 옆 캐릭터가 끼어드는 문제를 해결합니다.
+            배경 제거 후 캐릭터 윤곽을 자동 감지합니다. 작은 조각(먼지/노이즈)은 가장 가까운 캐릭터에 병합됩니다.
           </p>
         )}
       </div>
@@ -589,12 +589,32 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
           </>
         )}
 
-        {/* 요술봉 모드 전용: 최소 덩어리 크기 */}
+        {/* 요술봉 모드 전용: 노이즈 필터 */}
         {sliceMode === "magicWand" && (
           <div className="col-span-2">
             <label className="block text-xs text-zinc-400 mb-1">
-              최소 덩어리 크기 (px)
+              노이즈 필터 — 이보다 작은 조각은 무시
             </label>
+            <div className="flex gap-1 mb-2">
+              {[
+                { label: "약하게", value: 500, desc: "작은 조각도 유지" },
+                { label: "보통", value: 2000, desc: "권장" },
+                { label: "강하게", value: 5000, desc: "캐릭터만 남김" },
+              ].map((preset) => (
+                <button
+                  key={preset.value}
+                  onClick={() => setMinBlobSize(preset.value)}
+                  className={`px-2 py-1 text-xs rounded ${
+                    minBlobSize === preset.value
+                      ? "bg-blue-600 text-white"
+                      : "bg-zinc-700 hover:bg-zinc-600"
+                  }`}
+                  title={preset.desc}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
             <input
               type="range"
               min={500}
@@ -604,7 +624,9 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
               onChange={(e) => setMinBlobSize(Number(e.target.value))}
               className="w-full"
             />
-            <span className="text-xs text-zinc-500">{minBlobSize}px (작은 조각은 가까운 캐릭터에 병합)</span>
+            <span className="text-xs text-zinc-500">
+              ~{Math.round(Math.sqrt(minBlobSize))}×{Math.round(Math.sqrt(minBlobSize))}px 이하 조각 제거
+            </span>
           </div>
         )}
 
