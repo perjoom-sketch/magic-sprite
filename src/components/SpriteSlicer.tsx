@@ -23,7 +23,7 @@ import JSZip from "jszip";
 interface SpriteSlicerProps {
   /** 생성 결과 이미지 URL (fal.media 등 외부) */
   source?: string | null;
-  /** 영상에서 추출된 프레임 (직접 주입) - 셀 분리 건너뛰고 alignFramesWithSpec으로 */
+  /** 영상에서 추출된 프레임 (직접 주입) - 요술봉 등 후처리 가능 */
   cells?: ImageData[] | null;
 }
 
@@ -62,6 +62,11 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
   const fileInputRef = useRef<HTMLInputElement>(null);
   const animRef = useRef<number | null>(null);
 
+  // 영상에서 주입된 프레임 (요술봉 처리 전)
+  const [videoCells, setVideoCells] = useState<ImageData[] | null>(null);
+  // 영상 프레임 썸네일 (캐싱)
+  const [videoCellThumbnails, setVideoCellThumbnails] = useState<string[]>([]);
+
   // 출력 규격 설정
   const [useOutputSpec, setUseOutputSpec] = useState(false);
   const [sizeMode, setSizeMode] = useState<SizeMode>("auto");
@@ -79,46 +84,33 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
     if (source) setImageUrl(source);
   }, [source]);
 
-  // injectedCells가 있으면 바로 처리 (영상 프레임 직접 주입)
+  // injectedCells가 있으면 videoCells에 저장 (바로 처리하지 않고 사용자가 "오리기 실행" 클릭 시 처리)
   useEffect(() => {
-    if (!injectedCells || injectedCells.length === 0) return;
-
-    setProcessing(true);
-    setError(null);
-    setResult(null);
-
-    try {
-      // 출력 규격 적용하여 프레임 생성
-      const outputSpec: OutputSpec = {
-        sizeMode,
-        width: fixedWidth,
-        height: fixedHeight,
-        aspectW,
-        aspectH,
-        longSide,
-        fitMode,
-        fillRatio,
-        alignMode,
-        pixelArt,
-      };
-
-      const sliceResult = alignFramesWithSpec(injectedCells, outputSpec);
-
-      if (sliceResult.frames.length === 0) {
-        setError("프레임을 처리할 수 없습니다.");
-      } else {
-        setResult(sliceResult);
-        // 영상 프레임은 출력 규격 자동 활성화
-        if (!useOutputSpec) {
-          setUseOutputSpec(true);
-        }
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "처리 중 오류 발생");
-    } finally {
-      setProcessing(false);
+    if (!injectedCells || injectedCells.length === 0) {
+      setVideoCells(null);
+      setVideoCellThumbnails([]);
+      return;
     }
-  }, [injectedCells, sizeMode, fixedWidth, fixedHeight, aspectW, aspectH, longSide, fitMode, fillRatio, alignMode, pixelArt]);
+
+    // 영상 프레임 저장
+    setVideoCells(injectedCells);
+    setResult(null);
+    setError(null);
+
+    // 썸네일 생성
+    const thumbnails = injectedCells.map((frame) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = frame.width;
+      canvas.height = frame.height;
+      const ctx = canvas.getContext("2d")!;
+      ctx.putImageData(frame, 0, 0);
+      return canvas.toDataURL();
+    });
+    setVideoCellThumbnails(thumbnails);
+
+    // 영상 프레임은 출력 규격 자동 활성화
+    setUseOutputSpec(true);
+  }, [injectedCells]);
 
   // 애니메이션 루프
   useEffect(() => {
@@ -176,7 +168,134 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
     setRows(detected.rows);
   };
 
+  // 단일 프레임에 요술봉(connected components) 적용하여 가장 큰 덩어리만 추출
+  const extractLargestBlob = (frame: ImageData): ImageData => {
+    const { width, height } = frame;
+
+    // 크로마키 적용
+    const chromaKeyOpts = { targetColor: chromaColor, tolerance };
+    applyChromaKey(frame, chromaKeyOpts);
+
+    // connected components로 덩어리 찾기
+    const { labeled, sizes } = connectedComponents(frame);
+    const { blobs } = mergeSmallBlobs(labeled, width, height, sizes, minBlobSize);
+
+    if (blobs.length === 0) {
+      // 덩어리가 없으면 원본 반환
+      return frame;
+    }
+
+    // 가장 큰 덩어리 선택
+    const largestBlob = blobs.reduce((a, b) => a.pixels.length > b.pixels.length ? a : b);
+
+    // 바운딩 박스 계산
+    let left = width, top = height, right = 0, bottom = 0;
+    for (const p of largestBlob.pixels) {
+      if (p.x < left) left = p.x;
+      if (p.x > right) right = p.x;
+      if (p.y < top) top = p.y;
+      if (p.y > bottom) bottom = p.y;
+    }
+    right++;
+    bottom++;
+
+    const cellW = right - left;
+    const cellH = bottom - top;
+    const cellCanvas = document.createElement("canvas");
+    cellCanvas.width = cellW;
+    cellCanvas.height = cellH;
+    const cellCtx = cellCanvas.getContext("2d")!;
+    const cellData = cellCtx.createImageData(cellW, cellH);
+
+    const pixelSet = new Set<string>();
+    for (const p of largestBlob.pixels) {
+      pixelSet.add(`${p.x},${p.y}`);
+    }
+
+    for (let y = top; y < bottom; y++) {
+      for (let x = left; x < right; x++) {
+        const srcIdx = (y * width + x) * 4;
+        const dstIdx = ((y - top) * cellW + (x - left)) * 4;
+        if (pixelSet.has(`${x},${y}`)) {
+          cellData.data[dstIdx] = frame.data[srcIdx];
+          cellData.data[dstIdx + 1] = frame.data[srcIdx + 1];
+          cellData.data[dstIdx + 2] = frame.data[srcIdx + 2];
+          cellData.data[dstIdx + 3] = frame.data[srcIdx + 3];
+        } else {
+          cellData.data[dstIdx + 3] = 0;
+        }
+      }
+    }
+
+    return cellData;
+  };
+
   const handleSlice = async () => {
+    // 영상 프레임이 있으면 videoCells 처리
+    if (videoCells && videoCells.length > 0) {
+      setProcessing(true);
+      setError(null);
+      setResult(null);
+
+      try {
+        let cells: ImageData[];
+
+        if (sliceMode === "magicWand") {
+          // 요술봉 모드: 각 프레임에서 가장 큰 덩어리만 추출 (워터마크 제거)
+          cells = videoCells.map((frame) => {
+            // ImageData 복사 (원본 변경 방지)
+            const canvas = document.createElement("canvas");
+            canvas.width = frame.width;
+            canvas.height = frame.height;
+            const ctx = canvas.getContext("2d")!;
+            ctx.putImageData(frame, 0, 0);
+            const frameCopy = ctx.getImageData(0, 0, frame.width, frame.height);
+            return extractLargestBlob(frameCopy);
+          });
+        } else {
+          // 사각 분할 모드: 크로마키만 적용
+          cells = videoCells.map((frame) => {
+            const canvas = document.createElement("canvas");
+            canvas.width = frame.width;
+            canvas.height = frame.height;
+            const ctx = canvas.getContext("2d")!;
+            ctx.putImageData(frame, 0, 0);
+            const frameCopy = ctx.getImageData(0, 0, frame.width, frame.height);
+            const chromaKeyOpts = { targetColor: chromaColor, tolerance };
+            applyChromaKey(frameCopy, chromaKeyOpts);
+            return frameCopy;
+          });
+        }
+
+        const outputSpec: OutputSpec = {
+          sizeMode,
+          width: fixedWidth,
+          height: fixedHeight,
+          aspectW,
+          aspectH,
+          longSide,
+          fitMode,
+          fillRatio,
+          alignMode,
+          pixelArt,
+        };
+
+        const sliceResult = alignFramesWithSpec(cells, outputSpec);
+
+        if (sliceResult.frames.length === 0) {
+          setError("프레임을 처리할 수 없습니다.");
+        } else {
+          setResult(sliceResult);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "처리 중 오류 발생");
+      } finally {
+        setProcessing(false);
+      }
+      return;
+    }
+
+    // 기존 이미지 경로
     if (!imageUrl) return;
     setProcessing(true);
     setError(null);
@@ -347,34 +466,66 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
 
       {/* 입력 소스 */}
       <div className="flex items-center gap-4 mb-4">
-        {imageUrl && (
+        {imageUrl && !videoCells && (
           <img
             src={imageUrl}
             alt="Slicer source"
             className="h-16 rounded border border-zinc-600"
           />
         )}
-        <div className="flex flex-col gap-2">
-          {source && (
-            <span className="text-xs text-zinc-400">
-              생성 결과 자동 연결됨
-            </span>
-          )}
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600 rounded"
-          >
-            다른 이미지 업로드
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            onChange={handleUpload}
-            className="hidden"
-          />
-        </div>
+        {!videoCells && (
+          <div className="flex flex-col gap-2">
+            {source && (
+              <span className="text-xs text-zinc-400">
+                생성 결과 자동 연결됨
+              </span>
+            )}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-3 py-1.5 text-sm bg-zinc-700 hover:bg-zinc-600 rounded"
+            >
+              다른 이미지 업로드
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={handleUpload}
+              className="hidden"
+            />
+          </div>
+        )}
       </div>
+
+      {/* 영상 프레임 미리보기 */}
+      {videoCells && videoCells.length > 0 && (
+        <div className="mb-4 p-3 bg-purple-900/20 border border-purple-600/50 rounded-lg">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-purple-300 text-sm font-medium">
+                🎬 영상 프레임 {videoCells.length}장
+              </span>
+              <span className="text-xs text-purple-400">
+                ({videoCells[0].width}×{videoCells[0].height})
+              </span>
+            </div>
+            <span className="text-xs text-purple-400">
+              크로마키 + 요술봉으로 배경 제거 → 오리기 실행
+            </span>
+          </div>
+          <div className="flex gap-1 overflow-x-auto py-1">
+            {videoCellThumbnails.map((dataUrl, idx) => (
+              <img
+                key={idx}
+                src={dataUrl}
+                alt={`Frame ${idx + 1}`}
+                className="h-16 rounded border border-purple-600/30 flex-shrink-0"
+                title={`프레임 ${idx + 1}`}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 모드 선택 */}
       <div className="mb-4">
@@ -532,7 +683,7 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
         {/* 실행 */}
         <button
           onClick={handleSlice}
-          disabled={!imageUrl || processing}
+          disabled={(!imageUrl && !videoCells) || processing}
           className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded font-medium"
         >
           {processing ? "처리 중..." : "오리기 실행"}

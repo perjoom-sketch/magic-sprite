@@ -10,18 +10,12 @@ import {
   extractGifFrames,
   getGifMetadata,
 } from "@/lib/gifFrameExtractor";
-import { applyChromaKey } from "@/lib/spriteSlicer";
 
 interface VideoUploadProps {
   /** 프레임 추출 완료 시 호출 */
   onFramesExtracted: (frames: ImageData[]) => void;
 }
 
-const CHROMA_PRESETS: { label: string; color: [number, number, number] }[] = [
-  { label: "녹색", color: [0, 255, 0] },
-  { label: "검정", color: [0, 0, 0] },
-  { label: "흰색", color: [255, 255, 255] },
-];
 
 export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -47,9 +41,6 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
 
   // 추출 설정
   const [fps, setFps] = useState(8);
-  const [useChromaKey, setUseChromaKey] = useState(true);
-  const [chromaColor, setChromaColor] = useState<[number, number, number]>([0, 255, 0]);
-  const [tolerance, setTolerance] = useState(40);
 
   // 상태
   const [processing, setProcessing] = useState(false);
@@ -282,21 +273,8 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
     setError(null);
 
     try {
-      // 트림된 프레임만 추출 (인덱스 기반 slice)
-      let frames = allFrames.slice(trimStartIdx, trimEndIdx);
-
-      // 크로마키 적용
-      if (useChromaKey) {
-        frames = frames.map((frame) => {
-          const copy = new ImageData(
-            new Uint8ClampedArray(frame.data),
-            frame.width,
-            frame.height
-          );
-          applyChromaKey(copy, { targetColor: chromaColor, tolerance });
-          return copy;
-        });
-      }
+      // 트림된 프레임만 추출 (인덱스 기반 slice, 크로마키는 SpriteSlicer에서 적용)
+      const frames = allFrames.slice(trimStartIdx, trimEndIdx);
 
       if (frames.length === 0) {
         setError("프레임을 추출할 수 없습니다. 트림 범위를 확인해주세요.");
@@ -488,62 +466,15 @@ export default function VideoUpload({ onFramesExtracted }: VideoUploadProps) {
             </div>
           </div>
 
-          {/* 추출 설정 */}
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs text-zinc-400 mb-1">
-                선택 프레임: {selectedFrameCount}장
-              </label>
-              <div className="text-xs text-zinc-500 mt-2">
-                인덱스 {trimStartIdx}~{trimEndIdx - 1}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs text-zinc-400 mb-1">Tolerance</label>
-              <input
-                type="range"
-                min={10}
-                max={100}
-                value={tolerance}
-                onChange={(e) => setTolerance(Number(e.target.value))}
-                className="w-full"
-              />
-              <span className="text-xs text-zinc-500">{tolerance}</span>
-            </div>
-
-            <div>
-              <label className="block text-xs text-zinc-400 mb-1">크로마키 색</label>
-              <div className="flex gap-1">
-                {CHROMA_PRESETS.map((preset) => (
-                  <button
-                    key={preset.label}
-                    onClick={() => setChromaColor(preset.color)}
-                    className={`w-7 h-7 rounded border-2 ${
-                      JSON.stringify(chromaColor) === JSON.stringify(preset.color)
-                        ? "border-blue-400"
-                        : "border-zinc-600"
-                    }`}
-                    style={{
-                      backgroundColor: `rgb(${preset.color.join(",")})`,
-                    }}
-                    title={preset.label}
-                  />
-                ))}
-              </div>
-            </div>
-
-            <div className="flex items-end">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={useChromaKey}
-                  onChange={(e) => setUseChromaKey(e.target.checked)}
-                  className="w-4 h-4"
-                />
-                <span className="text-sm">크로마키 적용</span>
-              </label>
-            </div>
+          {/* 추출 정보 */}
+          <div className="flex items-center gap-4">
+            <span className="text-sm text-zinc-400">
+              선택 프레임: <span className="text-white font-medium">{selectedFrameCount}장</span>
+              <span className="text-zinc-500 ml-2">(인덱스 {trimStartIdx}~{trimEndIdx - 1})</span>
+            </span>
+            <span className="text-xs text-zinc-500">
+              배경 제거는 아래 스프라이트 오리기에서 진행
+            </span>
           </div>
 
           {/* 추출 버튼 */}
