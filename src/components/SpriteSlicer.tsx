@@ -48,7 +48,7 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
   const [sliceMode, setSliceMode] = useState<SliceMode>("grid");
   const [columns, setColumns] = useState(6);
   const [rows, setRows] = useState(1);
-  const [minBlobSize, setMinBlobSize] = useState(2000);
+  const [marginRatio, setMarginRatio] = useState(0.4); // 몸통 박스 짧은변 대비 여유 비율
   const [chromaColor, setChromaColor] = useState<[number, number, number]>([0, 255, 0]);
   const [tolerance, setTolerance] = useState(40);
   const [alignMode, setAlignMode] = useState<AlignMode>("bottom");
@@ -168,62 +168,99 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
     setRows(detected.rows);
   };
 
-  // 단일 프레임에 요술봉(connected components) 적용하여 가장 큰 덩어리만 추출
-  // 워터마크 제거: 작은 조각을 병합하지 않고, 가장 큰 덩어리만 남기고 나머지 전부 버림
-  const extractLargestBlob = (frame: ImageData): ImageData => {
+  // 프레임 정제: 몸통 바운딩박스 + 여유 영역 방식
+  // - 워터마크(구석 고립): 몸통 박스 밖 → 제거
+  // - 캐릭터 부위(꼬리/모자챙 등): 몸통 근처 → 보존
+  const cleanFrame = (frame: ImageData): ImageData => {
     const { width, height } = frame;
 
-    // 크로마키 적용
+    // 1. 크로마키 적용
     const chromaKeyOpts = { targetColor: chromaColor, tolerance };
     applyChromaKey(frame, chromaKeyOpts);
 
-    // connected components로 덩어리 찾기
+    // 2. connected components → 덩어리별 바운딩박스
     const { labeled, sizes } = connectedComponents(frame);
 
-    if (sizes.length === 0) {
-      return frame;
-    }
+    if (sizes.length === 0) return frame;
 
-    // 가장 큰 덩어리의 라벨 찾기 (병합 없이 단독 최대)
-    let largestLabel = 0;
-    let largestSize = 0;
-    for (let i = 0; i < sizes.length; i++) {
-      if (sizes[i] > largestSize) {
-        largestSize = sizes[i];
-        largestLabel = i + 1; // 라벨은 1부터 시작
+    // 각 라벨의 바운딩박스 계산
+    const bboxes: { left: number; top: number; right: number; bottom: number }[] =
+      sizes.map(() => ({ left: width, top: height, right: 0, bottom: 0 }));
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const label = labeled[y * width + x];
+        if (label === 0) continue;
+        const idx = label - 1;
+        if (x < bboxes[idx].left) bboxes[idx].left = x;
+        if (x > bboxes[idx].right) bboxes[idx].right = x;
+        if (y < bboxes[idx].top) bboxes[idx].top = y;
+        if (y > bboxes[idx].bottom) bboxes[idx].bottom = y;
       }
     }
 
-    if (largestLabel === 0) return frame;
+    // 3. 가장 큰 덩어리 = 몸통
+    let bodyIdx = 0;
+    for (let i = 1; i < sizes.length; i++) {
+      if (sizes[i] > sizes[bodyIdx]) bodyIdx = i;
+    }
+    const bodyBox = bboxes[bodyIdx];
 
-    // 가장 큰 덩어리의 바운딩 박스 + 픽셀 추출
-    let left = width, top = height, right = 0, bottom = 0;
+    // 4. 여유(margin) 확장 — 짧은 변의 marginRatio 배
+    const bodyW = bodyBox.right - bodyBox.left + 1;
+    const bodyH = bodyBox.bottom - bodyBox.top + 1;
+    const margin = Math.round(Math.min(bodyW, bodyH) * marginRatio);
+
+    const expandedLeft = bodyBox.left - margin;
+    const expandedTop = bodyBox.top - margin;
+    const expandedRight = bodyBox.right + margin;
+    const expandedBottom = bodyBox.bottom + margin;
+
+    // 5. 각 덩어리 판정: 확장 박스와 겹치면 채택
+    const keepLabels = new Set<number>();
+    for (let i = 0; i < sizes.length; i++) {
+      const bb = bboxes[i];
+      // 두 박스가 겹치는지 판정
+      const overlaps =
+        bb.left <= expandedRight &&
+        bb.right >= expandedLeft &&
+        bb.top <= expandedBottom &&
+        bb.bottom >= expandedTop;
+      if (overlaps) keepLabels.add(i + 1); // 라벨은 1-indexed
+    }
+
+    // 6. 채택된 픽셀의 최종 바운딩박스
+    let finalLeft = width, finalTop = height, finalRight = 0, finalBottom = 0;
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
-        if (labeled[y * width + x] === largestLabel) {
-          if (x < left) left = x;
-          if (x > right) right = x;
-          if (y < top) top = y;
-          if (y > bottom) bottom = y;
+        const label = labeled[y * width + x];
+        if (label > 0 && keepLabels.has(label)) {
+          if (x < finalLeft) finalLeft = x;
+          if (x > finalRight) finalRight = x;
+          if (y < finalTop) finalTop = y;
+          if (y > finalBottom) finalBottom = y;
         }
       }
     }
-    right++;
-    bottom++;
+    finalRight++;
+    finalBottom++;
 
-    const cellW = right - left;
-    const cellH = bottom - top;
+    if (finalLeft >= finalRight || finalTop >= finalBottom) return frame;
+
+    const cellW = finalRight - finalLeft;
+    const cellH = finalBottom - finalTop;
     const cellCanvas = document.createElement("canvas");
     cellCanvas.width = cellW;
     cellCanvas.height = cellH;
     const cellCtx = cellCanvas.getContext("2d")!;
     const cellData = cellCtx.createImageData(cellW, cellH);
 
-    for (let y = top; y < bottom; y++) {
-      for (let x = left; x < right; x++) {
+    for (let y = finalTop; y < finalBottom; y++) {
+      for (let x = finalLeft; x < finalRight; x++) {
+        const label = labeled[y * width + x];
         const srcIdx = (y * width + x) * 4;
-        const dstIdx = ((y - top) * cellW + (x - left)) * 4;
-        if (labeled[y * width + x] === largestLabel) {
+        const dstIdx = ((y - finalTop) * cellW + (x - finalLeft)) * 4;
+        if (label > 0 && keepLabels.has(label)) {
           cellData.data[dstIdx] = frame.data[srcIdx];
           cellData.data[dstIdx + 1] = frame.data[srcIdx + 1];
           cellData.data[dstIdx + 2] = frame.data[srcIdx + 2];
@@ -248,7 +285,7 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
         let cells: ImageData[];
 
         if (sliceMode === "magicWand") {
-          // 요술봉 모드: 각 프레임에서 가장 큰 덩어리만 추출 (워터마크 제거)
+          // 요술봉 모드: 몸통 바운딩박스 + 여유 영역으로 정제 (워터마크 제거 + 부위 보존)
           cells = videoCells.map((frame) => {
             // ImageData 복사 (원본 변경 방지)
             const canvas = document.createElement("canvas");
@@ -257,7 +294,7 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
             const ctx = canvas.getContext("2d")!;
             ctx.putImageData(frame, 0, 0);
             const frameCopy = ctx.getImageData(0, 0, frame.width, frame.height);
-            return extractLargestBlob(frameCopy);
+            return cleanFrame(frameCopy);
           });
         } else {
           // 사각 분할 모드: 크로마키만 적용
@@ -329,7 +366,7 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
           // 요술봉 모드: connected components로 셀 추출
           const { width, height } = data;
           const { labeled, sizes } = connectedComponents(data);
-          const { blobs } = mergeSmallBlobs(labeled, width, height, sizes, minBlobSize);
+          const { blobs } = mergeSmallBlobs(labeled, width, height, sizes, 2000);
 
           cells = [];
           for (const blob of blobs) {
@@ -398,7 +435,7 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
             chromaKey: { targetColor: chromaColor, tolerance },
             alignMode,
             padding,
-            minBlobSize,
+            minBlobSize: 2000,
           };
           sliceResult = sliceSpriteByContour(data, options);
         } else {
@@ -596,23 +633,23 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
           </>
         )}
 
-        {/* 요술봉 모드 전용: 노이즈 필터 */}
+        {/* 요술봉 모드 전용: 여유 영역 (margin) */}
         {sliceMode === "magicWand" && (
           <div className="col-span-2">
             <label className="block text-xs text-zinc-400 mb-1">
-              노이즈 필터 — 이보다 작은 조각은 무시
+              여유 영역 — 몸통 주변 부위 보존 범위
             </label>
             <div className="flex gap-1 mb-2">
               {[
-                { label: "약하게", value: 500, desc: "작은 조각도 유지" },
-                { label: "보통", value: 2000, desc: "권장" },
-                { label: "강하게", value: 5000, desc: "캐릭터만 남김" },
+                { label: "좁게", value: 0.2, desc: "워터마크 확실히 제거" },
+                { label: "보통", value: 0.4, desc: "권장" },
+                { label: "넓게", value: 0.7, desc: "떨어진 부위도 보존" },
               ].map((preset) => (
                 <button
                   key={preset.value}
-                  onClick={() => setMinBlobSize(preset.value)}
+                  onClick={() => setMarginRatio(preset.value)}
                   className={`px-2 py-1 text-xs rounded ${
-                    minBlobSize === preset.value
+                    marginRatio === preset.value
                       ? "bg-blue-600 text-white"
                       : "bg-zinc-700 hover:bg-zinc-600"
                   }`}
@@ -624,15 +661,15 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
             </div>
             <input
               type="range"
-              min={500}
-              max={10000}
-              step={100}
-              value={minBlobSize}
-              onChange={(e) => setMinBlobSize(Number(e.target.value))}
+              min={0.1}
+              max={1.0}
+              step={0.05}
+              value={marginRatio}
+              onChange={(e) => setMarginRatio(Number(e.target.value))}
               className="w-full"
             />
             <span className="text-xs text-zinc-500">
-              ~{Math.round(Math.sqrt(minBlobSize))}×{Math.round(Math.sqrt(minBlobSize))}px 이하 조각 제거
+              몸통 짧은변의 {Math.round(marginRatio * 100)}% 여유
             </span>
           </div>
         )}
