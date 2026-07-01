@@ -57,7 +57,7 @@ type InputTab = "image" | "video" | "video-gen";
 
 export default function Home() {
   // 입력 탭
-  const [activeTab, setActiveTab] = useState<InputTab>("image");
+  const [activeTab, setActiveTab] = useState<InputTab>("video");
 
   // 이미지 생성 관련
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -65,7 +65,7 @@ export default function Home() {
   const [resultImage, setResultImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [model, setModel] = useState<ModelType>("banana-pro");
+  const [model, setModel] = useState<ModelType>("banana2");
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>("auto");
   const [resolution, setResolution] = useState<Resolution>("1K");
   const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
