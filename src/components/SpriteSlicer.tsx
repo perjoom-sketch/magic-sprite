@@ -45,7 +45,7 @@ type SliceMode = "grid" | "magicWand";
 
 export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSlicerProps) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
-  const [sliceMode, setSliceMode] = useState<SliceMode>("grid");
+  const [sliceMode, setSliceMode] = useState<SliceMode>("magicWand");
   const [columns, setColumns] = useState(6);
   const [rows, setRows] = useState(1);
   const [marginRatio, setMarginRatio] = useState(0.4); // 몸통 박스 짧은변 대비 여유 비율
@@ -92,8 +92,10 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
       return;
     }
 
-    // 영상 프레임 저장
+    // 영상 프레임 저장 + 격자 설정 자동 반영 (트림 프레임 수)
     setVideoCells(injectedCells);
+    setColumns(injectedCells.length);
+    setRows(1);
     setResult(null);
     setError(null);
 
@@ -297,7 +299,7 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
             return cleanFrame(frameCopy);
           });
         } else {
-          // 사각 분할 모드: 크로마키만 적용
+          // 사각 분할 모드: 영상 프레임은 이미 낱장 → 격자 분할 불필요, 크로마키만 적용
           cells = videoCells.map((frame) => {
             const canvas = document.createElement("canvas");
             canvas.width = frame.width;
