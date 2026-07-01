@@ -169,6 +169,7 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
   };
 
   // 단일 프레임에 요술봉(connected components) 적용하여 가장 큰 덩어리만 추출
+  // 워터마크 제거: 작은 조각을 병합하지 않고, 가장 큰 덩어리만 남기고 나머지 전부 버림
   const extractLargestBlob = (frame: ImageData): ImageData => {
     const { width, height } = frame;
 
@@ -178,23 +179,34 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
 
     // connected components로 덩어리 찾기
     const { labeled, sizes } = connectedComponents(frame);
-    const { blobs } = mergeSmallBlobs(labeled, width, height, sizes, minBlobSize);
 
-    if (blobs.length === 0) {
-      // 덩어리가 없으면 원본 반환
+    if (sizes.length === 0) {
       return frame;
     }
 
-    // 가장 큰 덩어리 선택
-    const largestBlob = blobs.reduce((a, b) => a.pixels.length > b.pixels.length ? a : b);
+    // 가장 큰 덩어리의 라벨 찾기 (병합 없이 단독 최대)
+    let largestLabel = 0;
+    let largestSize = 0;
+    for (let i = 0; i < sizes.length; i++) {
+      if (sizes[i] > largestSize) {
+        largestSize = sizes[i];
+        largestLabel = i + 1; // 라벨은 1부터 시작
+      }
+    }
 
-    // 바운딩 박스 계산
+    if (largestLabel === 0) return frame;
+
+    // 가장 큰 덩어리의 바운딩 박스 + 픽셀 추출
     let left = width, top = height, right = 0, bottom = 0;
-    for (const p of largestBlob.pixels) {
-      if (p.x < left) left = p.x;
-      if (p.x > right) right = p.x;
-      if (p.y < top) top = p.y;
-      if (p.y > bottom) bottom = p.y;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (labeled[y * width + x] === largestLabel) {
+          if (x < left) left = x;
+          if (x > right) right = x;
+          if (y < top) top = y;
+          if (y > bottom) bottom = y;
+        }
+      }
     }
     right++;
     bottom++;
@@ -207,16 +219,11 @@ export default function SpriteSlicer({ source, cells: injectedCells }: SpriteSli
     const cellCtx = cellCanvas.getContext("2d")!;
     const cellData = cellCtx.createImageData(cellW, cellH);
 
-    const pixelSet = new Set<string>();
-    for (const p of largestBlob.pixels) {
-      pixelSet.add(`${p.x},${p.y}`);
-    }
-
     for (let y = top; y < bottom; y++) {
       for (let x = left; x < right; x++) {
         const srcIdx = (y * width + x) * 4;
         const dstIdx = ((y - top) * cellW + (x - left)) * 4;
-        if (pixelSet.has(`${x},${y}`)) {
+        if (labeled[y * width + x] === largestLabel) {
           cellData.data[dstIdx] = frame.data[srcIdx];
           cellData.data[dstIdx + 1] = frame.data[srcIdx + 1];
           cellData.data[dstIdx + 2] = frame.data[srcIdx + 2];
